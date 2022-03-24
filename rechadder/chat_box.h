@@ -18,7 +18,7 @@ namespace chat {
 	void message_recieved(box& b, const message& msg, display_queue& queue)
 	{
 		std::lock_guard g(queue.lock);
-		CONSOLE_SCREEN_BUFFER_INFOEX cbsi;
+		CONSOLE_SCREEN_BUFFER_INFOEX cbsi{0};
 		GetConsoleScreenBufferInfoEx(GetStdHandle(STD_OUTPUT_HANDLE), &cbsi);
 		auto old = cbsi;
 		cbsi.dwCursorPosition.X = 0;
@@ -50,7 +50,27 @@ namespace chat {
 				continue;
 			}
 		}
-		memcpy(msg.message, t_buf.data(), t_buf.length());
+		memcpy(msg.message, t_buf.c_str(), t_buf.length());
+		return msg;
+	}
+	net::packet_s_message s_create_message_packet(const std::string& username, const std::string& text)
+	{
+		net::packet_s_message msg{};
+		
+		auto t_buf = text;
+		net::string::trim(t_buf);
+
+		auto u_buf = username;
+		net::string::trim(u_buf);
+
+		if (t_buf.size() > 127)
+			memcpy(msg.message, "Message too long.", sizeof("Message too long."));
+		else
+			memcpy(msg.message, t_buf.c_str(), t_buf.length());
+		if (u_buf.size() > 31)
+			memcpy(msg.username, "Name too long", sizeof("Name too long"));
+		else
+			memcpy(msg.username, u_buf.c_str(), u_buf.length());
 		return msg;
 	}
 }

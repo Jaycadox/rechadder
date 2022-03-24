@@ -5,8 +5,8 @@
 #include <mutex>
 #include <string>
 struct connection {
-	sockaddr_in address{};
-	SOCKET socket{};
+	sockaddr_in address;
+	SOCKET socket;
 	struct shake {
 		bool completed{};
 	} handshake{};
@@ -23,7 +23,8 @@ struct server {
 
 struct session {
 	short port{};
-	bool server{};
+	bool is_server{};
+	server* server_instance = nullptr;
 };
 
 struct display_queue {

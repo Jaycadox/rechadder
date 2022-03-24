@@ -24,7 +24,8 @@ namespace net {
 	}
 	enum class packet_ids {
 		connection,
-		message
+		message,
+		s_message
 	};
 	struct packet_identifier {
 		short id{};
@@ -39,10 +40,15 @@ namespace net {
 		packet_identifier id{ (short)packet_ids::message, false };
 		char message[128]{};
 	};
+	struct packet_s_message {
+		packet_identifier id{ (short)packet_ids::s_message, true };
+		char message[128]{};
+		char username[32]{};
 
+	};
 	struct packet_handler {
 		std::function<void()> on_connection{};
-		std::function<void(const std::string&)> on_message{};
+		std::function<void(const std::string&, const std::string&)> on_message{};
 		connection& user;
 		bool is_server;
 	};
@@ -60,7 +66,7 @@ namespace net {
 		// we need to make sure that a char* that is passed in follows a certain size and character inclusion limit
 
 		std::string buffer{};
-		for (size_t i = 0; i < 128 || message[i] != '\0'; i++)
+		for (size_t i = 0; i < 128 && message[i] != '\0'; i++)
 		{
 			if (is_char_safe(message[i]))
 				buffer += message[i];
@@ -73,7 +79,7 @@ namespace net {
 	bool handle_packet(const packet_handler& handler, char* packet, int size)
 	{
 		//reject any packet over 64 bits
-		if (size > 256) return false;
+		if (size > 512) return false;
 		// determine what type of packet we're dealing with
 		auto basic_packet = reinterpret_cast<packet_identifier*>(packet);
 		if (basic_packet->id == (short)packet_ids::connection)
@@ -92,14 +98,19 @@ namespace net {
 		{
 			return false;
 		}
-		else if (!handler.user.handshake.completed)
+		else if (handler.is_server && !handler.user.handshake.completed)
 		{
 			return false;
 		}
-		else if (basic_packet->id == (short)packet_ids::message) // message packet
+		else if (basic_packet->id == (short)packet_ids::message) // client -> server message packet
 		{
 			auto msg_packet = reinterpret_cast<packet_message*>(basic_packet);
-			handler.on_message(handle_raw_string(msg_packet->message));
+			handler.on_message("", handle_raw_string(msg_packet->message));
+		}
+		else if (basic_packet->id == (short)packet_ids::s_message) // server -> client message packet
+		{
+			auto msg_packet = reinterpret_cast<packet_s_message*>(basic_packet);
+			handler.on_message(handle_raw_string(msg_packet->username), handle_raw_string(msg_packet->message));
 		}
 		return false;
 	}
