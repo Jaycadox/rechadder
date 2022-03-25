@@ -21,6 +21,7 @@
 #include "chat_box.h"
 #include <conio.h>
 #include "argparser.h"
+#include "command_handler.h"
 #include <random>
 session g_Session{};
 display_queue g_Queue{};
@@ -244,7 +245,31 @@ uint64_t generate_uid()
 
 void handle_connection(connection& c)
 {
+	bool running{ true };
 	net::packet_handler handler{ {}, {}, {}, c, g_Session.is_server };
+	command_handler cmd_handler{};
+	cmd_handler.commands.push_back(
+		command("\\\\leave",
+			[&](const std::vector<std::string>& args, const std::string& sender) {
+				send_packet(c, net::make_broadcast_packet("Goodbye!"));
+				closesocket(c.socket);
+				return false;
+		}));
+	cmd_handler.commands.push_back(
+		command("\\\\online",
+			[&](const std::vector<std::string>& args, const std::string& sender) {
+				std::string connected_list{};
+				for (const auto& conectee : g_Session.server_instance.connections)
+				{
+					connected_list += "\n - " + to_ip(conectee);
+				}
+				send_packet(c, 
+					net::make_broadcast_packet(
+						std::format("There are currently {} user/s online.\n{}", g_Session.server_instance.connections.size(), connected_list)
+					)
+				);
+				return false;
+			}));
 	// todo: set up packet handler
 	handler.on_raw = [&](const std::string& message) {
 		FLOG("{}\n", message);
@@ -253,6 +278,9 @@ void handle_connection(connection& c)
 	{
 		if (g_Session.is_server)
 		{
+			//test the command handler to see if we're allowed to return to this
+			// default handling.
+			if (!cmd_handler.to_handler(msg, username)) return;
 			FLOG("{}: {}\n", to_ip(c), msg);
 			// broadcast a server bound version of the packet to all peers
 			// todo: username customization
@@ -286,26 +314,21 @@ void handle_connection(connection& c)
 		{
 			if (g_Session.is_server)
 			{
-				if (remove_connection(c))
-				{
-					FINFO("Client disconnected: {}\n", to_ip(c));
-					
-				}
-				else
-				{
-					FINFO("Connection closed with: {}\n", to_ip(c));
-				}
+				FINFO("Client disconnected: {}\n", to_ip(c));
 			}
 			else
 			{
 				FINFO("Disconnected from server: {}\n", to_ip(c));
 			}
 			closesocket(c.socket);
+			remove_connection(c);
+			running = false;
+			return;
 		}
 		net::handle_packet(handler, content, size);
 	});
 
-	while (true) { std::this_thread::sleep_for(std::chrono::milliseconds(500)); }
+	while (running) { std::this_thread::sleep_for(std::chrono::milliseconds(500)); }
 	
 	
 }
@@ -335,10 +358,10 @@ void handle_connections()
 		//	//std::cout << get_last_winsock_error() << '\n';
 		//}
 		
-		std::thread([=]()
+		std::thread([&]()
 			{
-				auto c = ctn;
-				handle_connection(c);
+				//auto c = ctn;
+				handle_connection(g_Session.server_instance.connections.at(g_Session.server_instance.connections.size() - 1));
 			}
 		).detach();
 		std::this_thread::sleep_for(std::chrono::milliseconds(50));
