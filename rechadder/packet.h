@@ -35,6 +35,8 @@ namespace net {
 		packet_identifier id{ (short)packet_ids::connection, false };
 		short special_chadder_identifier{ 52 };
 		short special_chadder_identifier_2{ 62 };
+		char brand[16] = "alpha0.1";
+
 	};
 	struct packet_message {
 		packet_identifier id{ (short)packet_ids::message, false };
@@ -47,7 +49,7 @@ namespace net {
 
 	};
 	struct packet_handler {
-		std::function<void()> on_connection{};
+		std::function<void(const std::string& brand)> on_connection{};
 		std::function<void(const std::string&, const std::string&)> on_message{};
 		connection& user;
 		bool is_server;
@@ -78,6 +80,7 @@ namespace net {
 	}
 	bool handle_packet(const packet_handler& handler, char* packet, int size)
 	{
+		if (!packet) return false;
 		//reject any packet over 64 bits
 		if (size > 512) return false;
 		// determine what type of packet we're dealing with
@@ -92,13 +95,13 @@ namespace net {
 				return false;
 			}
 			handler.user.handshake.completed = true;
-			handler.on_connection();
+			handler.on_connection(handle_raw_string(packet->brand));
 		}
-		else if (handler.is_server == basic_packet->server)
+		else if (basic_packet->server == handler.is_server)
 		{
 			return false;
 		}
-		else if (handler.is_server && !handler.user.handshake.completed)
+		else if (!handler.user.handshake.completed)
 		{
 			return false;
 		}

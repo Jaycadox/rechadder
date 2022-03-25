@@ -133,25 +133,26 @@ void handle_connection_incoming(connection& c, const std::function<void(bool, ch
 			return;
 		}
 		if (bytesReceived <= 0) continue;
+		if (!buffer) continue;
 		callback(false, buffer, bytesReceived);
 	}
 }
 
-bool remove_connection(const connection& c, std::vector<connection>& connections)
+bool remove_connection(const connection& c)
 {
 	std::vector<connection> n{};
-	for (size_t i = 0; i < connections.size(); i++)
+	for (const auto& connection : g_Session.server_instance.connections)
 	{
-		if (connections.at(i).socket != c.socket)
+		if (connection.socket != c.socket)
 		{
-			n.emplace_back(connections.at(i));
+			n.emplace_back(connection);
 		}
 	}
-	connections = n;
+	g_Session.server_instance.connections = n;
 	return false;
 }
 
-void handle_connection(connection& c, server* s)
+void handle_connection(connection& c)
 {
 	net::packet_handler handler{ {}, {}, c, g_Session.is_server };
 	// todo: set up packet handler
@@ -162,7 +163,7 @@ void handle_connection(connection& c, server* s)
 			FLOG("{}: {}\n", to_ip(c.address), msg);
 			// broadcast a server bound version of the packet to all peers
 			// todo: username customization
-			for (const auto& cnt : s->connections)
+			for (const auto& cnt : g_Session.server_instance.connections)
 			{
 				send_packet(cnt, chat::s_create_message_packet("Other client", msg));
 			}
@@ -172,8 +173,17 @@ void handle_connection(connection& c, server* s)
 			FLOG("{}: {}\n", username, msg);
 		}
 	};
-	handler.on_connection = [&]() {
-		FINFO("Client connected: {}\n", to_ip(c.address));
+	handler.on_connection = [&](const std::string& brand) {
+		if (g_Session.is_server)
+		{
+			send_packet(c, net::packet_chadder_connection{});
+			FINFO("Client connected ({}): {}\n", brand, to_ip(c.address));
+		}
+		else
+		{
+			FINFO("Server is running rechadder version: {}\n", brand);
+		}
+
 	};
 
 	handle_connection_incoming(c, [&](bool terminatred, char* content, int size) {
@@ -181,19 +191,21 @@ void handle_connection(connection& c, server* s)
 		{
 			if (g_Session.is_server)
 			{
-				if (remove_connection(c, s->connections))
+				if (remove_connection(c))
 				{
-					FINFO("Client disconnected: {}", to_ip(c.address));
+					FINFO("Client disconnected: {}\n", to_ip(c.address));
+					
 				}
 				else
 				{
-					FINFO("Connection closed with: {}", to_ip(c.address));
+					FINFO("Connection closed with: {}\n", to_ip(c.address));
 				}
 			}
 			else
 			{
-				FINFO("Disconnected from server: {}", to_ip(c.address));
+				FINFO("Disconnected from server: {}\n", to_ip(c.address));
 			}
+			closesocket(c.socket);
 		}
 		net::handle_packet(handler, content, size);
 	});
@@ -203,7 +215,7 @@ void handle_connection(connection& c, server* s)
 	
 }
 
-void handle_connections(server& self)
+void handle_connections()
 {
 
 	while (true)
@@ -213,12 +225,12 @@ void handle_connections(server& self)
 		SOCKET hRemoteSocket{};
 
 		iRemoteAddrLen = sizeof(remoteAddr);
-		hRemoteSocket = accept(self.self_connection.socket, (sockaddr*)&remoteAddr, &iRemoteAddrLen);
+		hRemoteSocket = accept(g_Session.server_instance.self_connection.socket, (sockaddr*)&remoteAddr, &iRemoteAddrLen);
 		if (hRemoteSocket == INVALID_SOCKET) continue;
 		SYNC_FINFO("Client connecting... {}\n", to_ip(remoteAddr));
 		// on initial connection, add to connected users vector
 		auto ctn = connection(remoteAddr, hRemoteSocket);
-		self.connections.push_back(ctn);
+		g_Session.server_instance.connections.push_back(ctn);
 		//while (true)
 		//{
 		//	auto t = chat::s_create_message_packet("Other peer", "test");
@@ -226,10 +238,10 @@ void handle_connections(server& self)
 		//		sizeof(net::packet_s_message), 0);
 		//	//std::cout << get_last_winsock_error() << '\n';
 		//}
-		std::thread([=, &self]()
+		std::thread([=]()
 			{
 				auto c = ctn;
-				handle_connection(c, &self);
+				handle_connection(c);
 			}
 		).detach();
 	}
@@ -267,20 +279,20 @@ sockaddr_in create_socket_addr(std::optional<std::string> ip, short port)
 
 void start_server()
 {
-	server self{};
-	self.self_connection.socket = create_socket();
-	self.self_connection.address = create_socket_addr(std::nullopt, g_Session.port);
+	g_Session.server_instance = server{};
+	g_Session.server_instance.self_connection.socket = create_socket();
+	g_Session.server_instance.self_connection.address = create_socket_addr(std::nullopt, g_Session.port);
 
 	// Connect to the server
-	if (bind(self.self_connection.socket, 
-		(sockaddr*)(&self.self_connection.address), 
-		sizeof(self.self_connection.address)) != 0)
+	if (bind(g_Session.server_instance.self_connection.socket,
+		(sockaddr*)(&g_Session.server_instance.self_connection.address),
+		sizeof(g_Session.server_instance.self_connection.address)) != 0)
 	{
 		SYNC_FERROR("Failed to bind port: {}. Error code: {}\n", g_Session.port, get_last_winsock_error());
 		WSACleanup();
 		exit(1);
 	}
-	if (listen(self.self_connection.socket, SOMAXCONN) != 0)
+	if (listen(g_Session.server_instance.self_connection.socket, SOMAXCONN) != 0)
 	{
 		SYNC_FERROR("Failed to listen on port: {}. Error code: {}\n", g_Session.port, get_last_winsock_error());
 		WSACleanup();
@@ -288,9 +300,9 @@ void start_server()
 	}
 	SYNC_FINFO("Server started on port: {}\n", g_Session.port);
 
-	std::thread([&self]()
+	std::thread([]()
 		{
-			handle_connections(self);
+			handle_connections();
 		}
 	).detach();
 	
@@ -313,7 +325,7 @@ void start_client(const std::string& ip)
 	std::thread([client]()
 		{
 			auto h = client.connected_server;
-			handle_connection(h, nullptr);
+			handle_connection(h);
 		}
 	).detach();
 

@@ -24,7 +24,10 @@ struct server {
 struct session {
 	short port{};
 	bool is_server{};
-	server* server_instance = nullptr;
+	//todo: make thread safe
+	server server_instance;
+
+
 };
 
 struct display_queue {
