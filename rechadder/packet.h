@@ -28,6 +28,12 @@ namespace net {
 		s_message,
 		s_broadcast
 	};
+	static const bool server_bound[]{
+		false,
+		false,
+		true,
+		true
+	};
 	struct packet_identifier {
 		short id{};
 		bool server{};
@@ -111,7 +117,11 @@ namespace net {
 			handler.user.handshake.completed = true;
 			handler.on_connection(handle_raw_string(packet->brand), handle_raw_string(packet->username));
 		}
-		else if (basic_packet->server == handler.is_server)
+		else if (basic_packet->id >= sizeof(server_bound) || basic_packet->id < 0)
+		{
+			return false;
+		}
+		else if (server_bound[basic_packet->id] == handler.is_server)
 		{
 			return false;
 		}
