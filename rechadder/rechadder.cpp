@@ -231,6 +231,7 @@ void handle_connections()
 		// on initial connection, add to connected users vector
 		auto ctn = connection(remoteAddr, hRemoteSocket);
 		g_Session.server_instance.connections.push_back(ctn);
+
 		//while (true)
 		//{
 		//	auto t = chat::s_create_message_packet("Other peer", "test");
