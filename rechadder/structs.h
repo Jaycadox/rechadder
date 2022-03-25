@@ -10,6 +10,7 @@ struct connection {
 	struct shake {
 		bool completed{};
 	} handshake{};
+	std::optional<std::string> username{ std::nullopt };
 };
 
 struct client_connected_server {
@@ -26,11 +27,14 @@ struct session {
 	bool is_server{};
 	//todo: make thread safe
 	server server_instance;
-
-
+	std::string a_username{};
+	std::string a_ip{};
+	std::string a_port{};
+	bool a_server{};
 };
 
 struct display_queue {
 	std::mutex lock{};
 	std::vector<std::string> stack{};
+	std::atomic_bool halt{};
 };

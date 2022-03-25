@@ -10,6 +10,7 @@
 #include <thread>
 #include <vector>
 #include <functional>
+#undef DrawText
 // Need to link with Ws2_32.lib, Mswsock.lib, and Advapi32.lib
 #pragma comment (lib, "Ws2_32.lib")
 #pragma comment (lib, "Mswsock.lib")
@@ -18,9 +19,16 @@
 #include "packet.h"
 #include "structs.h"
 #include "chat_box.h"
+#include <conio.h>
+#include "argparser.h"
+#include <random>
 session g_Session{};
 display_queue g_Queue{};
 chat::box g_Box{};
+HWND own_window_handle;
+
+cxxopts::Options options("ReChadder", "Easy console communication.");
+cxxopts::ParseResult args;
 
 void add_to_message_queue(display_queue& queue, const std::string func)
 {
@@ -32,15 +40,20 @@ void message_queue_loop()
 {
 	while (true)
 	{
-		std::lock_guard guard(g_Queue.lock);
+		if (g_Queue.halt) continue;
+		g_Queue.lock.lock();
 		for (const auto& message : g_Queue.stack)
 		{
 			if (!message.empty())
 				std::cout << message;
 		}
 		g_Queue.stack.clear();
+		g_Queue.lock.unlock();
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
 	}
 }
+
+void entry();
 
 #define FLOG(x, ...) add_to_message_queue(g_Queue, std::format(x, __VA_ARGS__));
 #define FINFO(x, ...) add_to_message_queue(g_Queue, std::format(std::string("[info] ") + std::string(x), __VA_ARGS__));
@@ -89,6 +102,14 @@ static std::string WideStringToString(const std::wstring& wstr)
 	return ret;
 }
 
+std::string next_char()
+{
+	std::string buf{};
+	char c = (char)_getch();
+	buf.push_back(c);
+	return buf;
+}
+
 std::string get_last_winsock_error()
 {
 	auto last_error = WSAGetLastError();
@@ -111,13 +132,17 @@ void send_packet(const connection& c, T packet)
 }
 
 
-std::string to_ip(const sockaddr_in& addr)
+std::string to_ip(const connection& c)
 {
+	if (c.username.has_value())
+	{
+		return c.username.value();
+	}
 	return std::format("{}.{}.{}.{}",
-		addr.sin_addr.S_un.S_un_b.s_b1,
-		addr.sin_addr.S_un.S_un_b.s_b2,
-		addr.sin_addr.S_un.S_un_b.s_b3,
-		addr.sin_addr.S_un.S_un_b.s_b4
+		c.address.sin_addr.S_un.S_un_b.s_b1,
+		c.address.sin_addr.S_un.S_un_b.s_b2,
+		c.address.sin_addr.S_un.S_un_b.s_b3,
+		c.address.sin_addr.S_un.S_un_b.s_b4
 	);
 }
 
@@ -135,6 +160,7 @@ void handle_connection_incoming(connection& c, const std::function<void(bool, ch
 		if (bytesReceived <= 0) continue;
 		if (!buffer) continue;
 		callback(false, buffer, bytesReceived);
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
 	}
 }
 
@@ -152,20 +178,87 @@ bool remove_connection(const connection& c)
 	return false;
 }
 
+void user_input(client_connected_server& client)
+{
+	bool f8_pressed = false;
+	while (true)
+	{
+		if (own_window_handle != GetForegroundWindow()) continue;
+		if (GetAsyncKeyState(VK_TAB) != 0)
+			f8_pressed = true;
+		else if (f8_pressed)
+		{
+			f8_pressed = false;
+			g_Queue.halt = true;
+			std::cout.flush();
+			std::cout << std::endl << "> Compose message: \n   ";
+			std::string buffer{};
+			int allow_input{ 0 };
+			while (true)
+			{
+				auto c = next_char();
+				//if (allow_input != 1)
+				//{
+				//	allow_input++;
+				//	continue;
+				//}
+				if (c == "\r") break;
+
+				if (c == ";") continue;
+				if (c == "\b")
+				{
+					if(!buffer.empty())
+						buffer.pop_back();
+				}
+				else
+				{
+					buffer += c;
+				}
+
+				std::cout << c;
+				if (c == "\b")
+				{
+					std::cout << " \b";
+				}
+			}
+			std::cout << '\n';
+			send_packet(client.connected_server, chat::create_message_packet(buffer));
+			g_Queue.halt = false;
+		}
+		else
+		{
+			next_char();
+		}
+		//std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+}
+
+uint64_t generate_uid()
+{
+	std::random_device rd; // obtain a random number from hardware
+	std::mt19937 gen(rd()); // seed the generator
+	std::uniform_int_distribution<> distr(111111111, 999999999); // define the range
+
+	return distr(gen);
+}
+
 void handle_connection(connection& c)
 {
-	net::packet_handler handler{ {}, {}, c, g_Session.is_server };
+	net::packet_handler handler{ {}, {}, {}, c, g_Session.is_server };
 	// todo: set up packet handler
+	handler.on_raw = [&](const std::string& message) {
+		FLOG("{}\n", message);
+	};
 	handler.on_message = [&](const std::string& username, const std::string& msg)
 	{
 		if (g_Session.is_server)
 		{
-			FLOG("{}: {}\n", to_ip(c.address), msg);
+			FLOG("{}: {}\n", to_ip(c), msg);
 			// broadcast a server bound version of the packet to all peers
 			// todo: username customization
 			for (const auto& cnt : g_Session.server_instance.connections)
 			{
-				send_packet(cnt, chat::s_create_message_packet("Other client", msg));
+				send_packet(cnt, chat::s_create_message_packet(to_ip(c), msg));
 			}
 		}
 		else
@@ -173,11 +266,13 @@ void handle_connection(connection& c)
 			FLOG("{}: {}\n", username, msg);
 		}
 	};
-	handler.on_connection = [&](const std::string& brand) {
+	handler.on_connection = [&](const std::string& brand, const std::string& username) {
 		if (g_Session.is_server)
 		{
 			send_packet(c, net::packet_chadder_connection{});
-			FINFO("Client connected ({}): {}\n", brand, to_ip(c.address));
+			c.username = username + "#" + std::to_string(generate_uid());
+			send_packet(c, net::make_broadcast_packet("Rechadder is still in beta! And this is the testing server."));
+			FINFO("Client connected ({}): {}\n", brand, to_ip(c));
 		}
 		else
 		{
@@ -193,24 +288,24 @@ void handle_connection(connection& c)
 			{
 				if (remove_connection(c))
 				{
-					FINFO("Client disconnected: {}\n", to_ip(c.address));
+					FINFO("Client disconnected: {}\n", to_ip(c));
 					
 				}
 				else
 				{
-					FINFO("Connection closed with: {}\n", to_ip(c.address));
+					FINFO("Connection closed with: {}\n", to_ip(c));
 				}
 			}
 			else
 			{
-				FINFO("Disconnected from server: {}\n", to_ip(c.address));
+				FINFO("Disconnected from server: {}\n", to_ip(c));
 			}
 			closesocket(c.socket);
 		}
 		net::handle_packet(handler, content, size);
 	});
 
-	while (true) {}
+	while (true) { std::this_thread::sleep_for(std::chrono::milliseconds(500)); }
 	
 	
 }
@@ -227,9 +322,10 @@ void handle_connections()
 		iRemoteAddrLen = sizeof(remoteAddr);
 		hRemoteSocket = accept(g_Session.server_instance.self_connection.socket, (sockaddr*)&remoteAddr, &iRemoteAddrLen);
 		if (hRemoteSocket == INVALID_SOCKET) continue;
-		SYNC_FINFO("Client connecting... {}\n", to_ip(remoteAddr));
+		
 		// on initial connection, add to connected users vector
 		auto ctn = connection(remoteAddr, hRemoteSocket);
+		SYNC_FINFO("Client connecting... {}\n", to_ip(ctn));
 		g_Session.server_instance.connections.push_back(ctn);
 		//while (true)
 		//{
@@ -238,12 +334,14 @@ void handle_connections()
 		//		sizeof(net::packet_s_message), 0);
 		//	//std::cout << get_last_winsock_error() << '\n';
 		//}
+		
 		std::thread([=]()
 			{
 				auto c = ctn;
 				handle_connection(c);
 			}
 		).detach();
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
 	}
 	
 	
@@ -255,8 +353,7 @@ SOCKET create_socket()
 	if (hSocket == INVALID_SOCKET)
 	{
 		SYNC_FINFO("Socket failure.\n");
-		WSACleanup();
-		exit(1);
+		entry();
 	}
 	return hSocket;
 }
@@ -289,14 +386,12 @@ void start_server()
 		sizeof(g_Session.server_instance.self_connection.address)) != 0)
 	{
 		SYNC_FERROR("Failed to bind port: {}. Error code: {}\n", g_Session.port, get_last_winsock_error());
-		WSACleanup();
-		exit(1);
+		entry();
 	}
 	if (listen(g_Session.server_instance.self_connection.socket, SOMAXCONN) != 0)
 	{
 		SYNC_FERROR("Failed to listen on port: {}. Error code: {}\n", g_Session.port, get_last_winsock_error());
-		WSACleanup();
-		exit(1);
+		entry();
 	}
 	SYNC_FINFO("Server started on port: {}\n", g_Session.port);
 
@@ -316,12 +411,15 @@ void start_client(const std::string& ip)
 	if (connect(client.connected_server.socket, (sockaddr*)(&sockAddr), sizeof(sockAddr)) != 0)
 	{
 		SYNC_FINFO("Failed to connected to: {}. Error code: {}\n", ip, get_last_winsock_error());
-		WSACleanup();
-		exit(1);
+		entry();
 	}
 
 	SYNC_FINFO("Connected: {}\n", ip);
-	send_packet(client.connected_server, net::packet_chadder_connection{});
+	auto con = net::packet_chadder_connection{};
+	if(g_Session.a_username.length() < 16)
+		memcpy(con.username, net::handle_raw_string(g_Session.a_username.c_str()).c_str(),
+			net::handle_raw_string(g_Session.a_username.c_str()).length());
+	send_packet(client.connected_server, con);
 	std::thread([client]()
 		{
 			auto h = client.connected_server;
@@ -334,31 +432,94 @@ void start_client(const std::string& ip)
 		{
 			while (true)
 			{
-				send_packet(client.connected_server, chat::create_message_packet("Hello, world 1"));
-				std::this_thread::sleep_for(std::chrono::seconds(1));
+				
+				//std::this_thread::sleep_for(std::chrono::milliseconds(200));
 			}
 		}
 	).detach();
+	user_input(client);
 }
 
 void entry()
 {
 	std::thread(message_queue_loop).detach();
-	FINPUT("[0] Client [1] Server > ", resp);
-	g_Session.is_server = std::stoi(resp);
-	FINPUT("Port > ", resp_1);
+	if (!args.count("server") && !args.count("ip"))
+	{
 
-	g_Session.port = std::stoi(resp_1);
+		std::cout << "Client[0] Server[1] > ";
+		g_Session.is_server = std::stoi(next_char());
+		std::cout << std::format("{}\n", g_Session.is_server ? "Server" : "Client");
+	}
+	else
+	{
+		g_Session.is_server = g_Session.a_server;
+	}
+	if(!g_Session.is_server)
+		if (!args.count("ip"))
+		{
+			FINPUT("IP [blank=127.0.0.1]> ", resp_1);
+			if(!resp_1.empty())
+				g_Session.a_ip = resp_1;
+			else
+				g_Session.a_ip = "127.0.0.1";
+
+		}
+	
+	own_window_handle = GetConsoleWindow();
+	if (!args.count("port"))
+	{
+		FINPUT("Port [blank=1111]> ", resp_1);
+		if (!resp_1.empty())
+			g_Session.port = std::stoi(resp_1);
+		else
+			g_Session.port = 1111;
+	}
+	else
+	{
+		g_Session.port = std::stoi(g_Session.a_port);
+	}
+	if (!g_Session.is_server)
+		if (!args.count("username"))
+		{
+			FINPUT("Username [blank=Anon]> ", resp_1);
+			if(!resp_1.empty())
+				g_Session.a_username = resp_1;
+			else
+				g_Session.a_username = "Anon";
+
+		}
+
 	
 	if (!g_Session.is_server)
-		start_client("127.0.0.1");
+		start_client(g_Session.a_ip);
 	else
 		start_server();
-	while (true) {}
+	while (true) { std::this_thread::sleep_for(std::chrono::milliseconds(500)); }
 }
 
 int main(int argc, char** argv)
 {
+	std::cout << "(re)Chadder(box) - A simple communication system - made by jayphen\nOnce connected to a server, press TAB to compose a message.\n";
+	options.add_options()
+		("i,ip", "Address you wish to connect to", cxxopts::value<std::string>())
+		("p,port", "Port of server", cxxopts::value<std::string>())
+		("s,server", "Host a ReChadder server", cxxopts::value<bool>()->default_value("false"))
+		("u,username", "Username the server will display you as", cxxopts::value<std::string>())
+		("h,help", "Print usage")
+		;
+	args = options.parse(argc, argv);
+	if (args.count("help"))
+	{
+		std::cout << options.help() << std::endl;
+		exit(0);
+	}
+	if (args.count("ip"))
+		g_Session.a_ip = args["ip"].as<std::string>();
+	if (args.count("port"))
+		g_Session.a_port = args["port"].as<std::string>();
+	g_Session.a_server = args["server"].as<bool>();
+	if (args.count("username"))
+		g_Session.a_username = args["username"].as<std::string>();
 	const int iReqWinsockVer = 2;
 	WSADATA wsaData;
 	if (WSAStartup(MAKEWORD(iReqWinsockVer, 0), &wsaData) == 0)
@@ -370,7 +531,7 @@ int main(int argc, char** argv)
 			exit(1);
 		}
 		entry();
-			
+
 		if (WSACleanup() != 0)
 		{
 			SYNC_FERROR("Failed to clean up. WinSock error code: {}\n",

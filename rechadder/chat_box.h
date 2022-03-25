@@ -15,6 +15,15 @@ namespace chat {
 		std::vector<user> users{};
 		std::vector<message> messages{};
 	};
+	void offset_cursor(int x, int y)
+	{
+		CONSOLE_SCREEN_BUFFER_INFOEX cbsi{ 0 };
+		GetConsoleScreenBufferInfoEx(GetConsoleWindow(), &cbsi);
+		auto old = cbsi;
+		cbsi.dwCursorPosition.X += x;
+		cbsi.dwCursorPosition.Y += y;
+		SetConsoleScreenBufferInfoEx(GetConsoleWindow(), &cbsi);
+	}
 	void message_recieved(box& b, const message& msg, display_queue& queue)
 	{
 		std::lock_guard g(queue.lock);

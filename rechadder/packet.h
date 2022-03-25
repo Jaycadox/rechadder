@@ -25,7 +25,8 @@ namespace net {
 	enum class packet_ids {
 		connection,
 		message,
-		s_message
+		s_message,
+		s_broadcast
 	};
 	struct packet_identifier {
 		short id{};
@@ -35,6 +36,7 @@ namespace net {
 		packet_identifier id{ (short)packet_ids::connection, false };
 		short special_chadder_identifier{ 52 };
 		short special_chadder_identifier_2{ 62 };
+		char username[16] = "";
 		char brand[16] = "alpha0.1";
 
 	};
@@ -46,11 +48,15 @@ namespace net {
 		packet_identifier id{ (short)packet_ids::s_message, true };
 		char message[128]{};
 		char username[32]{};
-
+	};
+	struct packet_s_broadcast {
+		packet_identifier id{ (short)packet_ids::s_broadcast, true };
+		char message[512]{};
 	};
 	struct packet_handler {
-		std::function<void(const std::string& brand)> on_connection{};
+		std::function<void(const std::string& brand, const std::string& username)> on_connection{};
 		std::function<void(const std::string&, const std::string&)> on_message{};
+		std::function<void(const std::string&)> on_raw{};
 		connection& user;
 		bool is_server;
 	};
@@ -78,6 +84,12 @@ namespace net {
 		string::trim(buffer);
 		return buffer;
 	}
+	net::packet_s_broadcast make_broadcast_packet(const std::string& text)
+	{
+		net::packet_s_broadcast pack{};
+		memcpy(pack.message, text.c_str(), sizeof(pack.message));
+		return pack;
+	}
 	bool handle_packet(const packet_handler& handler, char* packet, int size)
 	{
 		if (!packet) return false;
@@ -94,8 +106,10 @@ namespace net {
 				//invalid challenge...
 				return false;
 			}
+			if (handle_raw_string(packet->username).length() < 3 && handler.is_server) return false;
+
 			handler.user.handshake.completed = true;
-			handler.on_connection(handle_raw_string(packet->brand));
+			handler.on_connection(handle_raw_string(packet->brand), handle_raw_string(packet->username));
 		}
 		else if (basic_packet->server == handler.is_server)
 		{
@@ -108,12 +122,19 @@ namespace net {
 		else if (basic_packet->id == (short)packet_ids::message) // client -> server message packet
 		{
 			auto msg_packet = reinterpret_cast<packet_message*>(basic_packet);
-			handler.on_message("", handle_raw_string(msg_packet->message));
+			auto content = handle_raw_string(msg_packet->message);
+			if(content.length() > 0)
+				handler.on_message("", content);
 		}
 		else if (basic_packet->id == (short)packet_ids::s_message) // server -> client message packet
 		{
 			auto msg_packet = reinterpret_cast<packet_s_message*>(basic_packet);
 			handler.on_message(handle_raw_string(msg_packet->username), handle_raw_string(msg_packet->message));
+		}
+		else if (basic_packet->id == (short)packet_ids::s_broadcast) // server -> client message packet
+		{
+			auto msg_packet = reinterpret_cast<packet_s_broadcast*>(basic_packet);
+			handler.on_raw(handle_raw_string(msg_packet->message));
 		}
 		return false;
 	}
