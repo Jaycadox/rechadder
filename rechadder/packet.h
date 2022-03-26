@@ -3,6 +3,59 @@
 #include <functional>
 #include "structs.h"
 namespace net {
+	namespace util {
+		std::string to_ip(const connection& c)
+		{
+			auto ip = std::format("{}.{}.{}.{}_{}",
+				c.address.sin_addr.S_un.S_un_b.s_b1,
+				c.address.sin_addr.S_un.S_un_b.s_b2,
+				c.address.sin_addr.S_un.S_un_b.s_b3,
+				c.address.sin_addr.S_un.S_un_b.s_b4, c.address.sin_port
+			);
+			if (g_Session.is_server && g_Session.server_instance.username_map.contains(std::to_string((uint64_t)&c)))
+				return g_Session.server_instance.username_map[std::to_string((uint64_t)&c)];
+
+			return ip;
+		}
+		template<class T>
+		void send_packet(const connection& c, T packet)
+		{
+			send(c.socket, reinterpret_cast<char*>(&packet),
+				sizeof(T), 0);
+		}
+		static std::string WideStringToString(const std::wstring& wstr)
+		{
+			if (wstr.empty())
+			{
+				return "";
+			}
+			size_t pos;
+			size_t begin = 0;
+			std::string ret;
+			int size;
+			pos = wstr.find(static_cast<wchar_t>(0), begin);
+			while (pos != std::wstring::npos && begin < wstr.length())
+			{
+				std::wstring segment = std::wstring(&wstr[begin], pos - begin);
+				size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &segment[0], (int)segment.size(), nullptr, 0, nullptr, nullptr);
+				std::string converted = std::string(size, 0);
+				WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &segment[0], (int)segment.size(), &converted[0], (int)converted.size(), nullptr, nullptr);
+				ret.append(converted);
+				ret.append({ 0 });
+				begin = pos + 1;
+				pos = wstr.find(static_cast<wchar_t>(0), begin);
+			}
+			if (begin <= wstr.length())
+			{
+				std::wstring segment = std::wstring(&wstr[begin], wstr.length() - begin);
+				size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &segment[0], (int)segment.size(), nullptr, 0, nullptr, nullptr);
+				std::string converted = std::string(size, 0);
+				WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &segment[0], (int)segment.size(), &converted[0], (int)converted.size(), nullptr, nullptr);
+				ret.append(converted);
+			}
+			return ret;
+		}
+	}
 	namespace string {
 		static inline void ltrim(std::string& s) {
 			s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](unsigned char ch) {

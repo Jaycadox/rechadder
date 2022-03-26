@@ -39,3 +39,4 @@ struct display_queue {
 	std::vector<std::string> stack{};
 	std::atomic_bool halt{};
 };
+inline session g_Session{};

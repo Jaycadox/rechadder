@@ -22,6 +22,7 @@
 #include <conio.h>
 #include "argparser.h"
 #include "command_handler.h"
+#include <filesystem>
 
 extern "C" {
 #include "lua/lua.h"
@@ -30,7 +31,7 @@ extern "C" {
 }
 
 #include <random>
-session g_Session{};
+
 display_queue g_Queue{};
 chat::box g_Box{};
 client_connected_server g_Client{};
@@ -38,6 +39,40 @@ HWND own_window_handle;
 
 cxxopts::Options options("ReChadder", "Easy console communication.");
 cxxopts::ParseResult args;
+
+static std::string WideStringToString(const std::wstring& wstr)
+{
+	if (wstr.empty())
+	{
+		return "";
+	}
+	size_t pos;
+	size_t begin = 0;
+	std::string ret;
+	int size;
+	pos = wstr.find(static_cast<wchar_t>(0), begin);
+	while (pos != std::wstring::npos && begin < wstr.length())
+	{
+		std::wstring segment = std::wstring(&wstr[begin], pos - begin);
+		size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &segment[0], (int)segment.size(), nullptr, 0, nullptr, nullptr);
+		std::string converted = std::string(size, 0);
+		WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &segment[0], (int)segment.size(), &converted[0], (int)converted.size(), nullptr, nullptr);
+		ret.append(converted);
+		ret.append({ 0 });
+		begin = pos + 1;
+		pos = wstr.find(static_cast<wchar_t>(0), begin);
+	}
+	if (begin <= wstr.length())
+	{
+		std::wstring segment = std::wstring(&wstr[begin], wstr.length() - begin);
+		size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &segment[0], (int)segment.size(), nullptr, 0, nullptr, nullptr);
+		std::string converted = std::string(size, 0);
+		WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &segment[0], (int)segment.size(), &converted[0], (int)converted.size(), nullptr, nullptr);
+		ret.append(converted);
+	}
+	return ret;
+}
+
 struct lua_argument {
 	virtual void push(lua_State* L) = 0;
 };
@@ -54,7 +89,7 @@ struct lua_int_argument : lua_argument {
 };
 struct lua_str_argument : lua_argument {
 	std::string value;
-	virtual void push(lua_State* L) override
+	void push(lua_State* L) override
 	{
 		lua_pushstring(L, value.c_str());
 	}
@@ -63,14 +98,13 @@ struct lua_str_argument : lua_argument {
 		value = v;
 	}
 };
-struct shared_state {
-	lua_State* L{nullptr};
-};
+
 struct lua_function {
-	int ref = LUA_REFNIL;
+	//int ref = LUA_REFNIL;
+	std::vector<int> refs{};
 	bool is_set{};
-	shared_state* L{};
-	lua_function(shared_state* state)
+	lua_State* L{};
+	lua_function(lua_State* state)
 	{
 		L = state;
 	}
@@ -78,32 +112,35 @@ struct lua_function {
 	{
 		if (ret != LUA_OK)
 		{
-			std::cout << "[LUA error] " << lua_tostring(L->L, -1) << "\n";
+			std::cout << "[LUA error] " << lua_tostring(L, -1) << "\n";
 			return false;
 		}
 		return true;
 	}
 
 	void push_table_string(const std::string& key, const std::string& value) {
-		lua_pushstring(L->L, key.c_str());
-		lua_pushstring(L->L, value.c_str());
-		lua_settable(L->L, -3);
+		lua_pushstring(L, key.c_str());
+		lua_pushstring(L, value.c_str());
+		lua_settable(L, -3);
 	}
 	bool r_call_table(const std::vector<std::tuple<std::string, std::string>> args, int returnc)
 	{
 		if (!is_set) return false;
-
-		lua_rawgeti(L->L, LUA_REGISTRYINDEX, ref);
-		lua_newtable(L->L);
-		for (const auto& arg : args)
-			push_table_string(std::get<0>(arg), std::get<1>(arg));
-		check(lua_pcall(L->L, 1, returnc, 0));
-		if (returnc)
+		for (const auto& ref : refs)
 		{
-			if (lua_isboolean(L->L, -1))
+			lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
+			lua_newtable(L);
+			for (const auto& arg : args)
+				push_table_string(std::get<0>(arg), std::get<1>(arg));
+			check(lua_pcall(L, 1, returnc, 0));
+			if (returnc)
 			{
-				return lua_toboolean(L->L, -1);
+				if (lua_isboolean(L, -1) && lua_toboolean(L, -1))
+				{
+					return true;
+				}
 			}
+			
 		}
 		return false;
 	}
@@ -114,14 +151,18 @@ struct lua_function {
 	void call()
 	{
 		if (!is_set) return;
-		lua_rawgeti(L->L, LUA_REGISTRYINDEX, ref);
-		check(lua_pcall(L->L, 0, 0, 0));
+		for (const auto& ref : refs)
+		{
+			lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
+			check(lua_pcall(L, 0, 0, 0));
+		}
+
 	}
 	void set(int iref)
 	{
 		is_set = true; 
 		
-		ref = iref;
+		refs.push_back(iref);
 	}
 };
 LPVOID m_fiber;
@@ -190,206 +231,295 @@ std::string to_ip(const connection& c)
 	return ip;
 }
 
-// Lua Scripting
-struct script_hooks {
+struct lua_script {
 	lua_State* state = luaL_newstate();
-	shared_state s_state = shared_state(state);
-	lua_function on_client{ &s_state };
-	lua_function on_server{ &s_state };
-	lua_function on_start{ &s_state };
-	lua_function on_message{ &s_state };
+	void init();
+	bool check(int ret);
+};
+
+struct script_hooks {
+	std::vector<lua_script> scripts{};
+	std::vector<lua_function> on_client{};
+	std::vector<lua_function> on_server{};
+	std::vector<lua_function> on_start{};
+	std::vector<lua_function> on_message{};
 	static inline script_hooks* context = nullptr;
-	static int LUA_on_client(lua_State* L)
-	{
-		if (!context) return 0;
-		context->on_client.set(luaL_ref(L, LUA_REGISTRYINDEX));
-		return 0;
-	}
-	static int LUA_on_start(lua_State* L)
-	{
-		if (lua_gettop(L) != 1 || !lua_isfunction(L, 1))
-		{
-			return luaL_error(L, "expecting arguments: function(on_client_start)");
-		}
-		if (!context) return 0;
-		context->on_start.set(luaL_ref(L, LUA_REGISTRYINDEX));
-		return 0;
-	}
-	static int LUA_on_server(lua_State* L)
-	{
-		if (lua_gettop(L) != 1 || !lua_isfunction(L, 1))
-		{
-			return luaL_error(L, "expecting arguments: function(on_server_start)");
-		}
-		if (!context) return 0;
-		context->on_server.set(luaL_ref(L, LUA_REGISTRYINDEX));
-		return 0;
-	}
-	static int LUA_on_message(lua_State* L)
-	{
-		if (lua_gettop(L) != 1 || !lua_isfunction(L, 1))
-		{
-			return luaL_error(L, "expecting arguments: function(on_message(msg))");
-		}
-		if (!context) return 0;
-		context->on_message.set(luaL_ref(L, LUA_REGISTRYINDEX));
-		return 0;
-	}
-	static int LUA_create_os_thread(lua_State* L)
-	{
-		if (!context) return 0;
-		if (lua_gettop(L) != 1 || !lua_isfunction(L, 1))
-		{
-			return luaL_error(L, "expecting arguments: function(on_thread_creation)");
-		}
-		const auto g_cache = new lua_function(&context->s_state);
+	static int LUA_on_client(lua_State* L);
+	static int LUA_on_start(lua_State* L);
+	static int LUA_on_server(lua_State* L);
+	static int LUA_on_message(lua_State* L);
+	static int LUA_create_os_thread(lua_State* L);
+	static int LUA_send_message(lua_State* L);
+	static int LUA_broadcast(lua_State* L);
+	static int LUA_send(lua_State* L);
+	static int LUA_thread_sleep(lua_State* L);
+	void load(bool re = false);
+	script_hooks();
+	void init();
+	~script_hooks();
 
-		g_cache->set(luaL_ref(L, LUA_REGISTRYINDEX));
-		fibers.emplace_back(std::make_unique<fiber>(g_cache, [] {
-			fiber::get_current()->data->call();
-			
-		}));
-		return 0;
-	}
-	static int LUA_send_message(lua_State* L)
-	{
-		if (lua_gettop(L) != 1 || !lua_isstring(L, 1))
-		{
-			return luaL_error(L, "expecting arguments: string(message)");
-		}
-		if (g_Session.is_server)
-		{
-			return luaL_error(L, "attempt to call client.send_message on server. try using: server.broadcast");
-		}
-		std::string message = std::string(lua_tostring(L, 1));
-		send_packet(g_Client.connected_server, chat::create_message_packet(message));
-		return 0;
-	}
-	static int LUA_broadcast(lua_State* L)
-	{
-		if (lua_gettop(L) != 1 || !lua_isstring(L, 1))
-		{
-			return luaL_error(L, "expecting arguments: string(message)");
-		}
-		if (!g_Session.is_server)
-		{
-			return luaL_error(L, "attempt to call server.broadcast on client. try using: client.send_message");
-		}
-		std::string message = std::string(lua_tostring(L, 1));
-		for(const auto& client : g_Session.server_instance.connections)
-			send_packet(client, net::make_broadcast_packet(message));
-		return 0;
-	}
-	static int LUA_send(lua_State* L)
-	{
-		if (lua_gettop(L) != 2 || !lua_isstring(L, 1) || !lua_isstring(L, 2))
-		{
-			return luaL_error(L, "expecting arguments: string(recipient), string(content)");
-		}
-		if (!g_Session.is_server)
-		{
-			return luaL_error(L, "attempt to call server.send on client. try using: client.send_message");
-		}
-		std::string recipient = std::string(lua_tostring(L, 1));
-		std::string message = std::string(lua_tostring(L, 2));
-		for (const auto& client : g_Session.server_instance.connections)
-			if (recipient == to_ip(client))
-			{
-				send_packet(client, net::make_broadcast_packet(message));
-				lua_pushboolean(L, true);
-				return 1;
-			}
-		lua_pushboolean(L, false);
-		return 1;
-	}
-	static int LUA_thread_sleep(lua_State* L)
-	{
-		if (lua_gettop(L) != 1 || !lua_isinteger(L, 1))
-		{
-			return luaL_error(L, "expecting arguments: int(time_ms)");
-		}
-		const int time = lua_tointeger(L, 1);
-		fiber::get_current()->yield(std::chrono::milliseconds(time));
-		return 0;
-	}
-	void load(bool re = false)
-	{
-		context = this;
-		if (re) 
-		{
-			lua_close(state);
-			state = luaL_newstate();
-		}
-		s_state.L = state;
-		init();
-		check(luaL_dofile(g_ScriptHook.state,
-			"C:\\Users\\nicol\\Documents\\c++\\chadder\\rechadder\\x64\\Debug\\plugin.lua"));
-		on_start.call();
-		(g_Session.is_server ? on_server : on_client).call();
-		
-	}
-	script_hooks()
-	{
-		init();
-	}
-	void init()
-	{
-		context = this;
-		luaL_openlibs(state);
-		lua_register(state, "__events_on_client", script_hooks::LUA_on_client);
-		lua_register(state, "__events_on_server", script_hooks::LUA_on_server);
-		lua_register(state, "__events_on_start", script_hooks::LUA_on_start);
-		lua_register(state, "__events_on_message", script_hooks::LUA_on_message);
-
-		lua_register(state, "__client_send_message", script_hooks::LUA_send_message);
-
-		lua_register(state, "__server_broadcast", script_hooks::LUA_broadcast);
-		lua_register(state, "__server_send", script_hooks::LUA_send);
-
-		lua_register(state, "__util_create_thread", script_hooks::LUA_create_os_thread);
-		lua_register(state, "__util_thread_sleep", script_hooks::LUA_thread_sleep);
-		luaL_dostring(state,
-			" \
-			events = {}\
-			events.on_client = __events_on_client\
-			__events_on_client = nil\
-			events.on_server = __events_on_server\
-			__events_on_client = nil\
-			events.on_start = __events_on_start\
-			__events_on_start = nil\
-			events.on_message = __events_on_message\
-			__events_on_message = nil\
-			client = {}\
-			client.send_message = __client_send_message\
-			__client_send_message = nil\
-			server = {}\
-			server.broadcast = __server_broadcast\
-			__server_broadcast = nil\
-			server.send = __server_send\
-			__server_send = nil\
-			util = {}\
-			util.create_thread = __util_create_thread\
-			__util_create_thread = nil\
-			util.yield = __util_thread_sleep\
-			__util_thread_sleep = nil\
-			"
-		);
-	}
-	~script_hooks()
-	{
-		lua_close(state);
-	}
-	bool check(int ret)
-	{
-		if (ret != LUA_OK)
-		{
-			std::cout << "[LUA error] " << lua_tostring(state, -1) << "\n";
-			return false;
-		}
-		return true;
-	}
 } g_ScriptHook;
 
+
+
+void lua_script::init()
+{
+	luaL_openlibs(state);
+	lua_register(state, "__events_on_client", script_hooks::LUA_on_client);
+	lua_register(state, "__events_on_server", script_hooks::LUA_on_server);
+	lua_register(state, "__events_on_start", script_hooks::LUA_on_start);
+	lua_register(state, "__events_on_message", script_hooks::LUA_on_message);
+
+	lua_register(state, "__client_send_message", script_hooks::LUA_send_message);
+
+	lua_register(state, "__server_broadcast", script_hooks::LUA_broadcast);
+	lua_register(state, "__server_send", script_hooks::LUA_send);
+
+	lua_register(state, "__util_create_thread", script_hooks::LUA_create_os_thread);
+	lua_register(state, "__util_thread_sleep", script_hooks::LUA_thread_sleep);
+	luaL_dostring(state,
+		" \
+		events = {}\
+		events.on_client = __events_on_client\
+		__events_on_client = nil\
+		events.on_server = __events_on_server\
+		__events_on_client = nil\
+		events.on_start = __events_on_start\
+		__events_on_start = nil\
+		events.on_message = __events_on_message\
+		__events_on_message = nil\
+		client = {}\
+		client.send_message = __client_send_message\
+		__client_send_message = nil\
+		server = {}\
+		server.broadcast = __server_broadcast\
+		__server_broadcast = nil\
+		server.send = __server_send\
+		__server_send = nil\
+		util = {}\
+		util.create_thread = __util_create_thread\
+		__util_create_thread = nil\
+		util.yield = __util_thread_sleep\
+		__util_thread_sleep = nil\
+		"
+	);
+
+}
+
+bool lua_script::check(int ret)
+{
+	if (ret != LUA_OK)
+	{
+		std::cout << "[LUA error] " << lua_tostring(state, -1) << "\n";
+		return false;
+	}
+	return true;
+}
+
+//struct shared_state {
+//	lua_State* L{nullptr};
+//};
+// Lua Scripting
+
+
+int script_hooks::LUA_on_client(lua_State* L)
+{
+	if (!context) return 0;
+	context->on_client.emplace_back(lua_function(L)).set(luaL_ref(L, LUA_REGISTRYINDEX));
+	return 0;
+}
+
+int script_hooks::LUA_on_start(lua_State* L)
+{
+	if (lua_gettop(L) != 1 || !lua_isfunction(L, 1))
+	{
+		return luaL_error(L, "expecting arguments: function(on_client_start)");
+	}
+	if (!context) return 0;
+	context->on_start.emplace_back(lua_function(L)).set(luaL_ref(L, LUA_REGISTRYINDEX));
+	return 0;
+}
+
+int script_hooks::LUA_on_server(lua_State* L)
+{
+	if (lua_gettop(L) != 1 || !lua_isfunction(L, 1))
+	{
+		return luaL_error(L, "expecting arguments: function(on_server_start)");
+	}
+	if (!context) return 0;
+	context->on_server.emplace_back(lua_function(L)).set(luaL_ref(L, LUA_REGISTRYINDEX));
+
+	return 0;
+}
+
+int script_hooks::LUA_on_message(lua_State* L)
+{
+	if (lua_gettop(L) != 1 || !lua_isfunction(L, 1))
+	{
+		return luaL_error(L, "expecting arguments: function(on_message(msg))");
+	}
+	if (!context) return 0;
+	context->on_message.emplace_back(lua_function(L)).set(luaL_ref(L, LUA_REGISTRYINDEX));
+
+	return 0;
+}
+
+int script_hooks::LUA_create_os_thread(lua_State* L)
+{
+	if (!context) return 0;
+	if (lua_gettop(L) != 1 || !lua_isfunction(L, 1))
+	{
+		return luaL_error(L, "expecting arguments: function(on_thread_creation)");
+	}
+	//find state
+	lua_function* g_cache = nullptr;
+	for (auto& s : context->scripts)
+		if (s.state == L)
+		{
+			g_cache = new lua_function(s.state);
+			std::cout << "found state...\n";
+		}
+
+
+
+	g_cache->set(luaL_ref(L, LUA_REGISTRYINDEX));
+	fibers.emplace_back(std::make_unique<fiber>(g_cache, [] {
+		fiber::get_current()->data->call();
+		}));
+	return 0;
+}
+
+int script_hooks::LUA_send_message(lua_State* L)
+{
+	if (lua_gettop(L) != 1 || !lua_isstring(L, 1))
+	{
+		return luaL_error(L, "expecting arguments: string(message)");
+	}
+	if (g_Session.is_server)
+	{
+		return luaL_error(L, "attempt to call client.send_message on server. try using: server.broadcast");
+	}
+	std::string message = std::string(lua_tostring(L, 1));
+	send_packet(g_Client.connected_server, chat::create_message_packet(message));
+	return 0;
+}
+
+int script_hooks::LUA_broadcast(lua_State* L)
+{
+	if (lua_gettop(L) != 1 || !lua_isstring(L, 1))
+	{
+		return luaL_error(L, "expecting arguments: string(message)");
+	}
+	if (!g_Session.is_server)
+	{
+		return luaL_error(L, "attempt to call server.broadcast on client. try using: client.send_message");
+	}
+	std::string message = std::string(lua_tostring(L, 1));
+	for (const auto& client : g_Session.server_instance.connections)
+		send_packet(client, net::make_broadcast_packet(message));
+	return 0;
+}
+
+int script_hooks::LUA_send(lua_State* L)
+{
+	if (lua_gettop(L) != 2 || !lua_isstring(L, 1) || !lua_isstring(L, 2))
+	{
+		return luaL_error(L, "expecting arguments: string(recipient), string(content)");
+	}
+	if (!g_Session.is_server)
+	{
+		return luaL_error(L, "attempt to call server.send on client. try using: client.send_message");
+	}
+	std::string recipient = std::string(lua_tostring(L, 1));
+	std::string message = std::string(lua_tostring(L, 2));
+	for (const auto& client : g_Session.server_instance.connections)
+		if (recipient == to_ip(client))
+		{
+			send_packet(client, net::make_broadcast_packet(message));
+			lua_pushboolean(L, true);
+			return 1;
+		}
+	lua_pushboolean(L, false);
+	return 1;
+}
+
+int script_hooks::LUA_thread_sleep(lua_State* L)
+{
+	if (lua_gettop(L) != 1 || !lua_isinteger(L, 1))
+	{
+		return luaL_error(L, "expecting arguments: int(time_ms)");
+	}
+	const int time = lua_tointeger(L, 1);
+	fiber::get_current()->yield(std::chrono::milliseconds(time));
+	return 0;
+}
+
+void script_hooks::load(bool re /*= false*/)
+{
+	fibers.clear();
+	
+	on_client.clear();
+	on_server.clear();
+	on_start.clear();
+	on_message.clear();
+
+	context = this;
+	if (re)
+	{
+		auto g = std::lock_guard(g_Queue.lock);
+		std::cout << "[LUA] Reloading scripts...\n";
+		for (auto& sc : scripts)
+		{
+			if(sc.state)
+				lua_close(sc.state);
+		}
+		std::cout << "[LUA] Scripts reloaded\n";
+	}
+	scripts.clear();
+	init();
+	WCHAR path[MAX_PATH];
+	GetModuleFileNameW(nullptr, path, MAX_PATH);
+	std::wstring wpstr = path;
+	std::string plugin_dir = std::filesystem::path(WideStringToString(wpstr)).parent_path().string() + "\\plugins\\";
+	if (std::filesystem::exists(plugin_dir))
+	{
+		auto g = std::lock_guard(g_Queue.lock);
+		for (const auto& entry : std::filesystem::directory_iterator(plugin_dir))
+		{
+			if (!entry.path().string().ends_with(".lua")) continue;
+			if(!re) std::cout << "[LUA] Loading " << entry.path().filename().string() << "...\n";
+			auto& sc = scripts.emplace_back(lua_script());
+			sc.init();
+			sc.check(luaL_dofile(sc.state,
+				entry.path().string().c_str()));
+			for (auto& func : (!g_Session.is_server ? script_hooks::context->on_client : script_hooks::context->on_server))
+			{
+				func.call();
+			}
+			if (!re) std::cout << "[LUA] Loaded " << entry.path().filename().string() << "!\n";
+		}
+	}
+
+	//on_start.call();
+	//(g_Session.is_server ? on_server : on_client).call();
+}
+
+script_hooks::script_hooks()
+{
+	init();
+}
+
+void script_hooks::init()
+{
+	context = this;
+	//for(const auto )
+}
+
+script_hooks::~script_hooks()
+{
+	for (auto& sc : scripts)
+		lua_close(sc.state);
+}
 
 void add_to_message_queue(display_queue& queue, const std::string func)
 {
@@ -434,38 +564,7 @@ void entry();
 std::cout << "[input] " << std::format(x); std::getline(std::cin, name1);\
 }\
 
-static std::string WideStringToString(const std::wstring& wstr)
-{
-	if (wstr.empty())
-	{
-		return "";
-	}
-	size_t pos;
-	size_t begin = 0;
-	std::string ret;
-	int size;
-	pos = wstr.find(static_cast<wchar_t>(0), begin);
-	while (pos != std::wstring::npos && begin < wstr.length())
-	{
-		std::wstring segment = std::wstring(&wstr[begin], pos - begin);
-		size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &segment[0], (int)segment.size(), nullptr, 0, nullptr, nullptr);
-		std::string converted = std::string(size, 0);
-		WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &segment[0], (int)segment.size(), &converted[0], (int)converted.size(), nullptr, nullptr);
-		ret.append(converted);
-		ret.append({ 0 });
-		begin = pos + 1;
-		pos = wstr.find(static_cast<wchar_t>(0), begin);
-	}
-	if (begin <= wstr.length())
-	{
-		std::wstring segment = std::wstring(&wstr[begin], wstr.length() - begin);
-		size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &segment[0], (int)segment.size(), nullptr, 0, nullptr, nullptr);
-		std::string converted = std::string(size, 0);
-		WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &segment[0], (int)segment.size(), &converted[0], (int)converted.size(), nullptr, nullptr);
-		ret.append(converted);
-	}
-	return ret;
-}
+
 
 std::string next_char()
 {
@@ -537,9 +636,6 @@ void server_input()
 		{
 			f1_pressed = false;
 			f1_pressed = false;
-			std::cout << "[LUA] Reloading scripts...\n";
-
-			fibers.clear();
 			g_ScriptHook.load(true);
 		}
 	}
@@ -650,10 +746,14 @@ void handle_connection(connection& c)
 	};
 	handler.on_message = [&](const std::string& username, const std::string& msg)
 	{
-		if (script_hooks::context->on_message.r_call_table({ {"username", g_Session.is_server ? to_ip(c) : username}, {"message", msg} }, 1))
+		for (auto& func : script_hooks::context->on_message)
 		{
-			return;
+			if (func.r_call_table({ {"username", g_Session.is_server ? to_ip(c) : username}, {"message", msg} }, 1))
+			{
+				return;
+			}
 		}
+
 		if (g_Session.is_server)
 		{
 			//test the command handler to see if we're allowed to return to this
@@ -683,7 +783,10 @@ void handle_connection(connection& c)
 		else
 		{
 			SYNC_FINFO("Handshake established ({})\n", "52, 62");
-			g_ScriptHook.on_client.call();
+			for (auto& func : script_hooks::context->on_client)
+			{
+				func.call();
+			}
 			FINFO("Server is running rechadder version: {}\n", brand);
 		}
 
@@ -918,9 +1021,13 @@ int main(int argc, char** argv)
 {
 
 	std::cout << "(re)Chadder(box) - A simple communication system - made by jayphen\nOnce connected to a server, press TAB to compose a message.\n";
-	g_ScriptHook.on_start.call_table({
-		{"version", "alpha"}
-	});
+
+	for (auto& func : script_hooks::context->on_start)
+	{
+		func.call_table({
+			{"version", "alpha"}
+		});
+	}
 	options.add_options()
 		("i,ip", "Address you wish to connect to", cxxopts::value<std::string>())
 		("p,port", "Port of server", cxxopts::value<std::string>())
