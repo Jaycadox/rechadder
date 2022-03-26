@@ -139,26 +139,27 @@ void send_packet(const connection& c, T packet)
 
 std::string to_ip(const connection& c)
 {
-	if (c.username.has_value())
-	{
-		return c.username.value();
-	}
-	return std::format("{}.{}.{}.{}",
+	auto ip = std::format("{}.{}.{}.{}_{}",
 		c.address.sin_addr.S_un.S_un_b.s_b1,
 		c.address.sin_addr.S_un.S_un_b.s_b2,
 		c.address.sin_addr.S_un.S_un_b.s_b3,
-		c.address.sin_addr.S_un.S_un_b.s_b4
+		c.address.sin_addr.S_un.S_un_b.s_b4, c.address.sin_port
 	);
+	if (g_Session.is_server && g_Session.server_instance.username_map.contains(std::to_string((uint64_t)&c)))
+		return g_Session.server_instance.username_map[std::to_string((uint64_t)&c)];
+	
+	return ip;
 }
 
-void handle_connection_incoming(connection& c, const std::function<void(bool, char*, int)>& callback)
+void handle_connection_incoming(SOCKET c, const std::function<void(bool, char*, int)>& callback)
 {
 	char buffer[512];
-	while (c.socket != INVALID_SOCKET)
+	while (c != INVALID_SOCKET)
 	{
-		int bytesReceived = recv(c.socket, buffer, sizeof(buffer), 0);
+		int bytesReceived = recv(c, buffer, sizeof(buffer), 0);
 		if (WSAGetLastError())
 		{
+			std::cout << get_last_winsock_error() << '\n';
 			callback(true, nullptr, 0);
 			return;
 		}
@@ -186,17 +187,19 @@ bool remove_connection(const connection& c)
 void user_input(client_connected_server& client)
 {
 	bool f8_pressed = false;
+	bool in_menu = false;
 	while (true)
 	{
 		if (own_window_handle != GetForegroundWindow()) continue;
-		if (GetAsyncKeyState(VK_TAB) != 0)
+		if (!in_menu && GetAsyncKeyState(VK_TAB) != 0)
 			f8_pressed = true;
 		else if (f8_pressed)
 		{
+			in_menu = true;
 			f8_pressed = false;
 			g_Queue.halt = true;
 			std::cout.flush();
-			std::cout << std::endl << "> Compose message: \n   ";
+			std::cout << "> Compose message: ";
 			std::string buffer{};
 			int allow_input{ 0 };
 			while (true)
@@ -226,9 +229,15 @@ void user_input(client_connected_server& client)
 					std::cout << " \b";
 				}
 			}
-			std::cout << '\n';
+			for (const auto& c : buffer + "> Compose message: ")
+				std::cout << "\b";
+			for (const auto& c : buffer + "> Compose message: ")
+				std::cout << " ";
+			for (const auto& c : buffer + "> Compose message: ")
+				std::cout << "\b";
 			send_packet(client.connected_server, chat::create_message_packet(buffer));
 			g_Queue.halt = false;
+			in_menu = false;
 		}
 		else
 		{
@@ -298,22 +307,24 @@ void handle_connection(connection& c)
 			FLOG("{}: {}\n", username, msg);
 		}
 	};
-	handler.on_connection = [&](const std::string& brand, const std::string& username) {
+	handler.on_connection = [&](const std::string& brand, const std::string username) {
 		if (g_Session.is_server)
 		{
 			send_packet(c, net::packet_chadder_connection{});
-			c.username = username + "#" + std::to_string(generate_uid());
+			std::cout << std::to_string((uint64_t)c.socket) << '\n';
+			g_Session.server_instance.username_map[std::to_string((uint64_t)&c)] = std::string(username + "#" + std::to_string(c.address.sin_port) + "_" + std::to_string(generate_uid()));
 			send_packet(c, net::make_broadcast_packet("Rechadder is still in beta! And this is the testing server."));
 			FINFO("Client connected ({}): {}\n", brand, to_ip(c));
 		}
 		else
 		{
+			SYNC_FINFO("Handshake established ({})\n", "52, 62");
 			FINFO("Server is running rechadder version: {}\n", brand);
 		}
 
 	};
 
-	handle_connection_incoming(c, [&](bool terminatred, char* content, int size) {
+	handle_connection_incoming(c.socket, [&](bool terminatred, char* content, int size) {
 		if (terminatred)
 		{
 			if (g_Session.is_server)
@@ -339,7 +350,7 @@ void handle_connection(connection& c)
 
 void handle_connections()
 {
-
+	g_Session.server_instance.connections.reserve(1000);
 	while (true)
 	{
 		sockaddr_in remoteAddr{};
@@ -351,21 +362,12 @@ void handle_connections()
 		if (hRemoteSocket == INVALID_SOCKET) continue;
 		
 		// on initial connection, add to connected users vector
-		auto ctn = connection(remoteAddr, hRemoteSocket);
-		SYNC_FINFO("Client connecting... {}\n", to_ip(ctn));
-		g_Session.server_instance.connections.push_back(ctn);
-		//while (true)
-		//{
-		//	auto t = chat::s_create_message_packet("Other peer", "test");
-		//	send(hRemoteSocket, reinterpret_cast<char*>(&t),
-		//		sizeof(net::packet_s_message), 0);
-		//	//std::cout << get_last_winsock_error() << '\n';
-		//}
-		
+		auto& ctn = g_Session.server_instance.connections.emplace_back(connection(remoteAddr, hRemoteSocket));
+		SYNC_FINFO("Client connecting.... {}\n", to_ip(ctn));
+		//g_Session.server_instance.connections.push_back(ctn);
 		std::thread([&]()
 			{
-				//auto c = ctn;
-				handle_connection(g_Session.server_instance.connections.at(g_Session.server_instance.connections.size() - 1));
+				handle_connection(ctn);
 			}
 		).detach();
 		std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -435,7 +437,7 @@ void start_client(const std::string& ip)
 	SetConsoleTitleA("ReChadder - Client");
 	client_connected_server client{};
 	client.connected_server.socket = create_socket();
-	SYNC_FINFO("Connection: {}\n", ip);
+	SYNC_FINFO("Connecting to {}...\n", ip);
 	sockaddr_in sockAddr = create_socket_addr(ip, g_Session.port);
 	if (connect(client.connected_server.socket, (sockaddr*)(&sockAddr), sizeof(sockAddr)) != 0)
 	{
@@ -443,7 +445,7 @@ void start_client(const std::string& ip)
 		entry();
 	}
 	SetConsoleTitleA(std::format("ReChadder - {}", ip).c_str());
-	SYNC_FINFO("Connected: {}\n", ip);
+	SYNC_FINFO("Establishing handshake... {}\n", ip);
 	auto con = net::packet_chadder_connection{};
 	if(g_Session.a_username.length() < 16)
 		memcpy(con.username, net::handle_raw_string(g_Session.a_username.c_str()).c_str(),

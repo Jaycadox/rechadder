@@ -7,10 +7,10 @@
 struct connection {
 	sockaddr_in address;
 	SOCKET socket;
+	uint64_t id;
 	struct shake {
 		bool completed{};
 	} handshake{};
-	std::optional<std::string> username{ std::nullopt };
 };
 
 struct client_connected_server {
@@ -20,6 +20,7 @@ struct client_connected_server {
 struct server {
 	connection self_connection{};
 	std::vector<connection> connections{};
+	std::unordered_map<std::string, std::string> username_map{};
 };
 
 struct session {
