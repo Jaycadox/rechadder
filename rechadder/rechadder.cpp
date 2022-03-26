@@ -22,14 +22,374 @@
 #include <conio.h>
 #include "argparser.h"
 #include "command_handler.h"
+
+extern "C" {
+#include "lua/lua.h"
+#include "lua/lauxlib.h"
+#include "lua/lualib.h"
+}
+
 #include <random>
 session g_Session{};
 display_queue g_Queue{};
 chat::box g_Box{};
+client_connected_server g_Client{};
 HWND own_window_handle;
 
 cxxopts::Options options("ReChadder", "Easy console communication.");
 cxxopts::ParseResult args;
+struct lua_argument {
+	virtual void push(lua_State* L) = 0;
+};
+struct lua_int_argument : lua_argument {
+	int value;
+	virtual void push(lua_State* L) override
+	{
+		lua_pushinteger(L, value);
+	}
+	lua_int_argument(int v)
+	{
+		value = v;
+	}
+};
+struct lua_str_argument : lua_argument {
+	std::string value;
+	virtual void push(lua_State* L) override
+	{
+		lua_pushstring(L, value.c_str());
+	}
+	lua_str_argument(std::string v)
+	{
+		value = v;
+	}
+};
+struct shared_state {
+	lua_State* L{nullptr};
+};
+struct lua_function {
+	int ref = LUA_REFNIL;
+	bool is_set{};
+	shared_state* L{};
+	lua_function(shared_state* state)
+	{
+		L = state;
+	}
+	bool check(int ret)
+	{
+		if (ret != LUA_OK)
+		{
+			std::cout << "[LUA error] " << lua_tostring(L->L, -1) << "\n";
+			return false;
+		}
+		return true;
+	}
+
+	void push_table_string(const std::string& key, const std::string& value) {
+		lua_pushstring(L->L, key.c_str());
+		lua_pushstring(L->L, value.c_str());
+		lua_settable(L->L, -3);
+	}
+	bool r_call_table(const std::vector<std::tuple<std::string, std::string>> args, int returnc)
+	{
+		if (!is_set) return false;
+
+		lua_rawgeti(L->L, LUA_REGISTRYINDEX, ref);
+		lua_newtable(L->L);
+		for (const auto& arg : args)
+			push_table_string(std::get<0>(arg), std::get<1>(arg));
+		check(lua_pcall(L->L, 1, returnc, 0));
+		if (returnc)
+		{
+			if (lua_isboolean(L->L, -1))
+			{
+				return lua_toboolean(L->L, -1);
+			}
+		}
+		return false;
+	}
+	void call_table(const std::vector<std::tuple<std::string, std::string>> args)
+	{
+		r_call_table(args, 0);
+	}
+	void call()
+	{
+		if (!is_set) return;
+		lua_rawgeti(L->L, LUA_REGISTRYINDEX, ref);
+		check(lua_pcall(L->L, 0, 0, 0));
+	}
+	void set(int iref)
+	{
+		is_set = true; 
+		
+		ref = iref;
+	}
+};
+LPVOID m_fiber;
+struct fiber {
+	using func_t = void(*)();
+	lua_function* data;
+	func_t func{};
+	LPVOID fiber_id;
+	std::optional<std::chrono::high_resolution_clock::time_point> m_wake_time;
+	void yield(std::optional<std::chrono::high_resolution_clock::duration> time = std::nullopt)
+	{
+		if (time.has_value())
+		{
+			m_wake_time = std::chrono::high_resolution_clock::now() + time.value();
+		}
+		else
+		{
+			m_wake_time = std::nullopt;
+		}
+
+		SwitchToFiber(m_fiber);
+	}
+	static fiber* get_current()
+	{
+		return static_cast<fiber*>(GetFiberData());
+	}
+	fiber(lua_function* d, func_t f)
+	{
+		func = f;
+		data = d;
+		fiber_id = CreateFiber(0, [](void* param)
+			{
+				auto this_fiber = static_cast<fiber*>(param);
+				fiber::get_current()->func();
+				while (true)
+				{
+					fiber::get_current()->yield();
+				}
+			}, this);
+	}
+	~fiber()
+	{
+		delete data;
+	}
+};
+std::vector<std::unique_ptr<fiber>> fibers{};
+template<class T>
+void send_packet(const connection& c, T packet)
+{
+	send(c.socket, reinterpret_cast<char*>(&packet),
+		sizeof(T), 0);
+}
+
+
+std::string to_ip(const connection& c)
+{
+	auto ip = std::format("{}.{}.{}.{}_{}",
+		c.address.sin_addr.S_un.S_un_b.s_b1,
+		c.address.sin_addr.S_un.S_un_b.s_b2,
+		c.address.sin_addr.S_un.S_un_b.s_b3,
+		c.address.sin_addr.S_un.S_un_b.s_b4, c.address.sin_port
+	);
+	if (g_Session.is_server && g_Session.server_instance.username_map.contains(std::to_string((uint64_t)&c)))
+		return g_Session.server_instance.username_map[std::to_string((uint64_t)&c)];
+
+	return ip;
+}
+
+// Lua Scripting
+struct script_hooks {
+	lua_State* state = luaL_newstate();
+	shared_state s_state = shared_state(state);
+	lua_function on_client{ &s_state };
+	lua_function on_server{ &s_state };
+	lua_function on_start{ &s_state };
+	lua_function on_message{ &s_state };
+	static inline script_hooks* context = nullptr;
+	static int LUA_on_client(lua_State* L)
+	{
+		if (!context) return 0;
+		context->on_client.set(luaL_ref(L, LUA_REGISTRYINDEX));
+		return 0;
+	}
+	static int LUA_on_start(lua_State* L)
+	{
+		if (lua_gettop(L) != 1 || !lua_isfunction(L, 1))
+		{
+			return luaL_error(L, "expecting arguments: function(on_client_start)");
+		}
+		if (!context) return 0;
+		context->on_start.set(luaL_ref(L, LUA_REGISTRYINDEX));
+		return 0;
+	}
+	static int LUA_on_server(lua_State* L)
+	{
+		if (lua_gettop(L) != 1 || !lua_isfunction(L, 1))
+		{
+			return luaL_error(L, "expecting arguments: function(on_server_start)");
+		}
+		if (!context) return 0;
+		context->on_server.set(luaL_ref(L, LUA_REGISTRYINDEX));
+		return 0;
+	}
+	static int LUA_on_message(lua_State* L)
+	{
+		if (lua_gettop(L) != 1 || !lua_isfunction(L, 1))
+		{
+			return luaL_error(L, "expecting arguments: function(on_message(msg))");
+		}
+		if (!context) return 0;
+		context->on_message.set(luaL_ref(L, LUA_REGISTRYINDEX));
+		return 0;
+	}
+	static int LUA_create_os_thread(lua_State* L)
+	{
+		if (!context) return 0;
+		if (lua_gettop(L) != 1 || !lua_isfunction(L, 1))
+		{
+			return luaL_error(L, "expecting arguments: function(on_thread_creation)");
+		}
+		const auto g_cache = new lua_function(&context->s_state);
+
+		g_cache->set(luaL_ref(L, LUA_REGISTRYINDEX));
+		fibers.emplace_back(std::make_unique<fiber>(g_cache, [] {
+			fiber::get_current()->data->call();
+			
+		}));
+		return 0;
+	}
+	static int LUA_send_message(lua_State* L)
+	{
+		if (lua_gettop(L) != 1 || !lua_isstring(L, 1))
+		{
+			return luaL_error(L, "expecting arguments: string(message)");
+		}
+		if (g_Session.is_server)
+		{
+			return luaL_error(L, "attempt to call client.send_message on server. try using: server.broadcast");
+		}
+		std::string message = std::string(lua_tostring(L, 1));
+		send_packet(g_Client.connected_server, chat::create_message_packet(message));
+		return 0;
+	}
+	static int LUA_broadcast(lua_State* L)
+	{
+		if (lua_gettop(L) != 1 || !lua_isstring(L, 1))
+		{
+			return luaL_error(L, "expecting arguments: string(message)");
+		}
+		if (!g_Session.is_server)
+		{
+			return luaL_error(L, "attempt to call server.broadcast on client. try using: client.send_message");
+		}
+		std::string message = std::string(lua_tostring(L, 1));
+		for(const auto& client : g_Session.server_instance.connections)
+			send_packet(client, net::make_broadcast_packet(message));
+		return 0;
+	}
+	static int LUA_send(lua_State* L)
+	{
+		if (lua_gettop(L) != 2 || !lua_isstring(L, 1) || !lua_isstring(L, 2))
+		{
+			return luaL_error(L, "expecting arguments: string(recipient), string(content)");
+		}
+		if (!g_Session.is_server)
+		{
+			return luaL_error(L, "attempt to call server.send on client. try using: client.send_message");
+		}
+		std::string recipient = std::string(lua_tostring(L, 1));
+		std::string message = std::string(lua_tostring(L, 2));
+		for (const auto& client : g_Session.server_instance.connections)
+			if (recipient == to_ip(client))
+			{
+				send_packet(client, net::make_broadcast_packet(message));
+				lua_pushboolean(L, true);
+				return 1;
+			}
+		lua_pushboolean(L, false);
+		return 1;
+	}
+	static int LUA_thread_sleep(lua_State* L)
+	{
+		if (lua_gettop(L) != 1 || !lua_isinteger(L, 1))
+		{
+			return luaL_error(L, "expecting arguments: int(time_ms)");
+		}
+		const int time = lua_tointeger(L, 1);
+		fiber::get_current()->yield(std::chrono::milliseconds(time));
+		return 0;
+	}
+	void load(bool re = false)
+	{
+		context = this;
+		if (re) 
+		{
+			lua_close(state);
+			state = luaL_newstate();
+		}
+		s_state.L = state;
+		init();
+		check(luaL_dofile(g_ScriptHook.state,
+			"C:\\Users\\nicol\\Documents\\c++\\chadder\\rechadder\\x64\\Debug\\plugin.lua"));
+		on_start.call();
+		(g_Session.is_server ? on_server : on_client).call();
+		
+	}
+	script_hooks()
+	{
+		init();
+	}
+	void init()
+	{
+		context = this;
+		luaL_openlibs(state);
+		lua_register(state, "__events_on_client", script_hooks::LUA_on_client);
+		lua_register(state, "__events_on_server", script_hooks::LUA_on_server);
+		lua_register(state, "__events_on_start", script_hooks::LUA_on_start);
+		lua_register(state, "__events_on_message", script_hooks::LUA_on_message);
+
+		lua_register(state, "__client_send_message", script_hooks::LUA_send_message);
+
+		lua_register(state, "__server_broadcast", script_hooks::LUA_broadcast);
+		lua_register(state, "__server_send", script_hooks::LUA_send);
+
+		lua_register(state, "__util_create_thread", script_hooks::LUA_create_os_thread);
+		lua_register(state, "__util_thread_sleep", script_hooks::LUA_thread_sleep);
+		luaL_dostring(state,
+			" \
+			events = {}\
+			events.on_client = __events_on_client\
+			__events_on_client = nil\
+			events.on_server = __events_on_server\
+			__events_on_client = nil\
+			events.on_start = __events_on_start\
+			__events_on_start = nil\
+			events.on_message = __events_on_message\
+			__events_on_message = nil\
+			client = {}\
+			client.send_message = __client_send_message\
+			__client_send_message = nil\
+			server = {}\
+			server.broadcast = __server_broadcast\
+			__server_broadcast = nil\
+			server.send = __server_send\
+			__server_send = nil\
+			util = {}\
+			util.create_thread = __util_create_thread\
+			__util_create_thread = nil\
+			util.yield = __util_thread_sleep\
+			__util_thread_sleep = nil\
+			"
+		);
+	}
+	~script_hooks()
+	{
+		lua_close(state);
+	}
+	bool check(int ret)
+	{
+		if (ret != LUA_OK)
+		{
+			std::cout << "[LUA error] " << lua_tostring(state, -1) << "\n";
+			return false;
+		}
+		return true;
+	}
+} g_ScriptHook;
+
 
 void add_to_message_queue(display_queue& queue, const std::string func)
 {
@@ -129,27 +489,9 @@ std::string get_last_winsock_error()
 }
 
 
-template<class T>
-void send_packet(const connection& c, T packet)
-{
-	send(c.socket, reinterpret_cast<char*>(&packet),
-		sizeof(T), 0);
-}
 
 
-std::string to_ip(const connection& c)
-{
-	auto ip = std::format("{}.{}.{}.{}_{}",
-		c.address.sin_addr.S_un.S_un_b.s_b1,
-		c.address.sin_addr.S_un.S_un_b.s_b2,
-		c.address.sin_addr.S_un.S_un_b.s_b3,
-		c.address.sin_addr.S_un.S_un_b.s_b4, c.address.sin_port
-	);
-	if (g_Session.is_server && g_Session.server_instance.username_map.contains(std::to_string((uint64_t)&c)))
-		return g_Session.server_instance.username_map[std::to_string((uint64_t)&c)];
-	
-	return ip;
-}
+
 
 void handle_connection_incoming(SOCKET c, const std::function<void(bool, char*, int)>& callback)
 {
@@ -183,10 +525,29 @@ bool remove_connection(const connection& c)
 	g_Session.server_instance.connections = n;
 	return false;
 }
+void server_input()
+{
+	bool f1_pressed = false;
+	while (true)
+	{
+		if (own_window_handle != GetForegroundWindow()) continue;
+		if (GetAsyncKeyState(VK_F1) != 0)
+			f1_pressed = true;
+		else if (f1_pressed)
+		{
+			f1_pressed = false;
+			f1_pressed = false;
+			std::cout << "[LUA] Reloading scripts...\n";
 
+			fibers.clear();
+			g_ScriptHook.load(true);
+		}
+	}
+}
 void user_input(client_connected_server& client)
 {
 	bool f8_pressed = false;
+	bool f1_pressed = false;
 	bool in_menu = false;
 	while (true)
 	{
@@ -289,6 +650,10 @@ void handle_connection(connection& c)
 	};
 	handler.on_message = [&](const std::string& username, const std::string& msg)
 	{
+		if (script_hooks::context->on_message.r_call_table({ {"username", g_Session.is_server ? to_ip(c) : username}, {"message", msg} }, 1))
+		{
+			return;
+		}
 		if (g_Session.is_server)
 		{
 			//test the command handler to see if we're allowed to return to this
@@ -311,7 +676,6 @@ void handle_connection(connection& c)
 		if (g_Session.is_server)
 		{
 			send_packet(c, net::packet_chadder_connection{});
-			std::cout << std::to_string((uint64_t)c.socket) << '\n';
 			g_Session.server_instance.username_map[std::to_string((uint64_t)&c)] = std::string(username + "#" + std::to_string(c.address.sin_port) + "_" + std::to_string(generate_uid()));
 			send_packet(c, net::make_broadcast_packet("Rechadder is still in beta! And this is the testing server."));
 			FINFO("Client connected ({}): {}\n", brand, to_ip(c));
@@ -319,6 +683,7 @@ void handle_connection(connection& c)
 		else
 		{
 			SYNC_FINFO("Handshake established ({})\n", "52, 62");
+			g_ScriptHook.on_client.call();
 			FINFO("Server is running rechadder version: {}\n", brand);
 		}
 
@@ -403,6 +768,23 @@ sockaddr_in create_socket_addr(std::optional<std::string> ip, short port)
 	return sa;
 }
 
+
+void main_fiber()
+{
+	while (true)
+	{
+		static bool ensure_main_fiber = (ConvertThreadToFiber(nullptr), true);
+		m_fiber = GetCurrentFiber();
+		for (const auto& f : fibers)
+		{
+			if (!f->m_wake_time.has_value() || f->m_wake_time.value() <= std::chrono::high_resolution_clock::now())
+			{
+				SwitchToFiber(f->fiber_id);
+			}
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
+	}
+}
 void start_server()
 {
 	SetConsoleTitleA(std::format("ReChadder - Server").c_str());
@@ -424,6 +806,7 @@ void start_server()
 		entry();
 	}
 	SYNC_FINFO("Server started on port: {}\n", g_Session.port);
+	g_ScriptHook.load();
 
 	std::thread([]()
 		{
@@ -431,15 +814,22 @@ void start_server()
 		}
 	).detach();
 	
+	std::thread([]()
+		{
+			server_input();
+		}
+	).detach();
+	main_fiber();
+	
 }
 void start_client(const std::string& ip)
 {
 	SetConsoleTitleA("ReChadder - Client");
-	client_connected_server client{};
-	client.connected_server.socket = create_socket();
+	
+	g_Client.connected_server.socket = create_socket();
 	SYNC_FINFO("Connecting to {}...\n", ip);
 	sockaddr_in sockAddr = create_socket_addr(ip, g_Session.port);
-	if (connect(client.connected_server.socket, (sockaddr*)(&sockAddr), sizeof(sockAddr)) != 0)
+	if (connect(g_Client.connected_server.socket, (sockaddr*)(&sockAddr), sizeof(sockAddr)) != 0)
 	{
 		SYNC_FINFO("Failed to connected to: {}. Error code: {}\n", ip, get_last_winsock_error());
 		entry();
@@ -450,14 +840,21 @@ void start_client(const std::string& ip)
 	if(g_Session.a_username.length() < 16)
 		memcpy(con.username, net::handle_raw_string(g_Session.a_username.c_str()).c_str(),
 			net::handle_raw_string(g_Session.a_username.c_str()).length());
-	send_packet(client.connected_server, con);
-	std::thread([client]()
+	send_packet(g_Client.connected_server, con);
+	std::thread([]()
 		{
-			auto h = client.connected_server;
+			auto h = g_Client.connected_server;
 			handle_connection(h);
 		}
 	).detach();
-	user_input(client);
+	g_ScriptHook.load();
+	
+	std::thread([]()
+		{
+			user_input(g_Client);
+		}
+	).detach();
+	main_fiber();
 }
 
 void entry()
@@ -519,7 +916,11 @@ void entry()
 
 int main(int argc, char** argv)
 {
+
 	std::cout << "(re)Chadder(box) - A simple communication system - made by jayphen\nOnce connected to a server, press TAB to compose a message.\n";
+	g_ScriptHook.on_start.call_table({
+		{"version", "alpha"}
+	});
 	options.add_options()
 		("i,ip", "Address you wish to connect to", cxxopts::value<std::string>())
 		("p,port", "Port of server", cxxopts::value<std::string>())
