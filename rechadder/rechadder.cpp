@@ -41,7 +41,11 @@ void message_queue_loop()
 {
 	while (true)
 	{
-		if (g_Queue.halt) continue;
+		if (g_Queue.halt || g_Queue.stack.size() == 0) 
+		{
+			std::this_thread::sleep_for(std::chrono::milliseconds(50));
+			continue;
+		}
 		g_Queue.lock.lock();
 		for (const auto& message : g_Queue.stack)
 		{
@@ -50,7 +54,7 @@ void message_queue_loop()
 		}
 		g_Queue.stack.clear();
 		g_Queue.lock.unlock();
-		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		std::this_thread::sleep_for(std::chrono::milliseconds(100));
 	}
 }
 
@@ -84,9 +88,9 @@ static std::string WideStringToString(const std::wstring& wstr)
 	while (pos != std::wstring::npos && begin < wstr.length())
 	{
 		std::wstring segment = std::wstring(&wstr[begin], pos - begin);
-		size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &segment[0], segment.size(), nullptr, 0, nullptr, nullptr);
+		size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &segment[0], (int)segment.size(), nullptr, 0, nullptr, nullptr);
 		std::string converted = std::string(size, 0);
-		WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &segment[0], segment.size(), &converted[0], converted.size(), nullptr, nullptr);
+		WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &segment[0], (int)segment.size(), &converted[0], (int)converted.size(), nullptr, nullptr);
 		ret.append(converted);
 		ret.append({ 0 });
 		begin = pos + 1;
@@ -95,9 +99,9 @@ static std::string WideStringToString(const std::wstring& wstr)
 	if (begin <= wstr.length())
 	{
 		std::wstring segment = std::wstring(&wstr[begin], wstr.length() - begin);
-		size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &segment[0], segment.size(), nullptr, 0, nullptr, nullptr);
+		size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &segment[0], (int)segment.size(), nullptr, 0, nullptr, nullptr);
 		std::string converted = std::string(size, 0);
-		WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &segment[0], segment.size(), &converted[0], converted.size(), nullptr, nullptr);
+		WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, &segment[0], (int)segment.size(), &converted[0], (int)converted.size(), nullptr, nullptr);
 		ret.append(converted);
 	}
 	return ret;
@@ -399,6 +403,7 @@ sockaddr_in create_socket_addr(std::optional<std::string> ip, short port)
 
 void start_server()
 {
+	SetConsoleTitleA(std::format("ReChadder - Server").c_str());
 	g_Session.server_instance = server{};
 	g_Session.server_instance.self_connection.socket = create_socket();
 	g_Session.server_instance.self_connection.address = create_socket_addr(std::nullopt, g_Session.port);
@@ -427,6 +432,7 @@ void start_server()
 }
 void start_client(const std::string& ip)
 {
+	SetConsoleTitleA("ReChadder - Client");
 	client_connected_server client{};
 	client.connected_server.socket = create_socket();
 	SYNC_FINFO("Connection: {}\n", ip);
@@ -436,7 +442,7 @@ void start_client(const std::string& ip)
 		SYNC_FINFO("Failed to connected to: {}. Error code: {}\n", ip, get_last_winsock_error());
 		entry();
 	}
-
+	SetConsoleTitleA(std::format("ReChadder - {}", ip).c_str());
 	SYNC_FINFO("Connected: {}\n", ip);
 	auto con = net::packet_chadder_connection{};
 	if(g_Session.a_username.length() < 16)
@@ -447,17 +453,6 @@ void start_client(const std::string& ip)
 		{
 			auto h = client.connected_server;
 			handle_connection(h);
-		}
-	).detach();
-
-
-	std::thread([client]()
-		{
-			while (true)
-			{
-				
-				//std::this_thread::sleep_for(std::chrono::milliseconds(200));
-			}
 		}
 	).detach();
 	user_input(client);
