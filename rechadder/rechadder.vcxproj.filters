@@ -227,5 +227,11 @@
     <ClInclude Include="lua\lauxlib.h">
       <Filter>Source Files\lua</Filter>
     </ClInclude>
+    <ClInclude Include="httplib.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="json.hpp">
+      <Filter>Source Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

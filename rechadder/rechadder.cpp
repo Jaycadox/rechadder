@@ -23,6 +23,8 @@
 #include "argparser.h"
 #include "command_handler.h"
 #include <filesystem>
+#include "httplib.h"
+#include "json.hpp"
 
 extern "C" {
 #include "lua/lua.h"
@@ -185,14 +187,9 @@ struct fiber {
 	void yield(std::optional<std::chrono::high_resolution_clock::duration> time = std::nullopt)
 	{
 		if (time.has_value())
-		{
 			m_wake_time = std::chrono::high_resolution_clock::now() + time.value();
-		}
 		else
-		{
 			m_wake_time = std::nullopt;
-		}
-
 		SwitchToFiber(m_fiber);
 	}
 	static fiber* get_current()
@@ -213,7 +210,6 @@ struct fiber {
 				}
 			}, this);
 	}
-
 };
 std::vector<std::unique_ptr<fiber>> fibers{};
 template<class T>
@@ -1106,7 +1102,19 @@ void entry()
 
 int main(int argc, char** argv)
 {
+	std::thread([] {
+		httplib::Server svr;
+		nlohmann::json j;
+		j["username"] = "test";
+		j["message"] = "uwu123";
+		svr.Get(R"(/numbers/(.+))", [&](const httplib::Request& req, httplib::Response& res) {
+			auto numbers = req.matches[1];
+			res.set_content(j.dump(), "text/json");
+		});
 
+		svr.listen("0.0.0.0", 8080);
+	}).detach();
+	
 	//std::cout << "(re)Chadder(box) - A simple communication system - made by jayphen\nOnce connected to a server, press TAB to compose a message.\n";
 
 	for (auto& func : script_hooks::context->on_start)

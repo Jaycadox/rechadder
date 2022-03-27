@@ -197,7 +197,7 @@ namespace net {
 			auto msg_packet = reinterpret_cast<packet_s_message*>(basic_packet);
 			handler.on_message(handle_raw_string(msg_packet->username), handle_raw_string(msg_packet->message));
 		}
-		else if (basic_packet->id == (short)packet_ids::s_broadcast) // server -> client message packet
+		else if (basic_packet->id == (short)packet_ids::s_broadcast) // server -> client raw message packet
 		{
 			if (size != sizeof(packet_s_broadcast)) return false;
 			auto msg_packet = reinterpret_cast<packet_s_broadcast*>(basic_packet);
