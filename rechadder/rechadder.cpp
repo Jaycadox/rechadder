@@ -251,11 +251,13 @@ struct script_hooks {
 	std::vector<lua_function> on_start{};
 	std::vector<lua_function> on_message{};
 	std::vector<lua_function> on_connection{};
+	std::vector<lua_function> on_compose{};
 	static inline script_hooks* context = nullptr;
 	static int LUA_on_client(lua_State* L);
 	static int LUA_on_start(lua_State* L);
 	static int LUA_on_server(lua_State* L);
 	static int LUA_on_connection(lua_State* L);
+	static int LUA_on_compose(lua_State* L);
 	static int LUA_connections(lua_State* L);
 	static int LUA_on_message(lua_State* L);
 	static int LUA_create_os_thread(lua_State* L);
@@ -281,6 +283,7 @@ void lua_script::init()
 	lua_register(state, "__events_on_message", script_hooks::LUA_on_message);
 
 	lua_register(state, "__client_send_message", script_hooks::LUA_send_message);
+	lua_register(state, "__client_on_compose", script_hooks::LUA_on_compose);
 
 	lua_register(state, "__server_broadcast", script_hooks::LUA_broadcast);
 	lua_register(state, "__server_send", script_hooks::LUA_send);
@@ -303,6 +306,8 @@ void lua_script::init()
 		client = {}\
 		client.send_message = __client_send_message\
 		__client_send_message = nil\
+		client.on_compose = __client_on_compose\
+		__client_on_compose = nil\
 		server = {}\
 		server.broadcast = __server_broadcast\
 		__server_broadcast = nil\
@@ -348,6 +353,17 @@ int script_hooks::LUA_on_client(lua_State* L)
 {
 	if (!context) return 0;
 	context->on_client.emplace_back(lua_function(L)).set(luaL_ref(L, LUA_REGISTRYINDEX));
+	return 0;
+}
+
+int script_hooks::LUA_on_compose(lua_State* L)
+{
+	if (!context) return 0;
+	if (g_Session.is_server)
+	{
+		return luaL_error(L, "attempt to call client.on_compose on server. servers cannot compose messages.");
+	}
+	context->on_compose.emplace_back(lua_function(L)).set(luaL_ref(L, LUA_REGISTRYINDEX));
 	return 0;
 }
 
@@ -504,6 +520,7 @@ void script_hooks::load(bool re /*= false*/)
 	on_start.clear();
 	on_message.clear();
 	on_connection.clear();
+	on_compose.clear();
 
 	context = this;
 	if (re)
@@ -530,14 +547,18 @@ void script_hooks::load(bool re /*= false*/)
 			sc.init();
 			sc.check(luaL_dofile(sc.state,
 				entry.path().string().c_str()));
-			for (auto& func : (!g_Session.is_server ? script_hooks::context->on_client : script_hooks::context->on_server))
-			{
-				func.call();
-			}
+			
 			if (!re) std::cout << "[LUA] Loaded " << entry.path().filename().string() << "!\n";
 		}
 	}
-
+	for (auto& func : script_hooks::context->on_start)
+	{
+		func.call();
+	}
+	for (auto& func : (!g_Session.is_server ? script_hooks::context->on_client : script_hooks::context->on_server))
+	{
+		func.call();
+	}
 	//on_start.call();
 	//(g_Session.is_server ? on_server : on_client).call();
 }
@@ -670,6 +691,7 @@ void server_input()
 		if (own_window_handle != GetForegroundWindow())
 		{
 			std::this_thread::sleep_for(std::chrono::milliseconds(50));
+			continue;
 		}
 		if (GetAsyncKeyState(VK_F1) != 0)
 			f1_pressed = true;
@@ -689,7 +711,11 @@ void user_input(client_connected_server& client)
 	bool in_menu = false;
 	while (true)
 	{
-		if (own_window_handle != GetForegroundWindow()) continue;
+		if (own_window_handle != GetForegroundWindow())
+		{
+			std::this_thread::sleep_for(std::chrono::milliseconds(50));
+			continue;
+		}
 		if (!in_menu && GetAsyncKeyState(VK_TAB) != 0)
 			f8_pressed = true;
 		else if (f8_pressed)
@@ -734,9 +760,19 @@ void user_input(client_connected_server& client)
 				std::cout << " ";
 			for (const auto& c : buffer + "> Compose message: ")
 				std::cout << "\b";
-			send_packet(client.connected_server, chat::create_message_packet(buffer));
 			g_Queue.halt = false;
 			in_menu = false;
+			bool should_send{true};
+			for (auto& func : script_hooks::context->on_compose)
+			{
+				if (func.r_call_table({std::make_tuple("message", buffer)}, 1))
+				{
+					should_send = false;
+					break;
+				}
+			}
+			if(should_send)
+				send_packet(client.connected_server, chat::create_message_packet(buffer));
 		}
 		else if (GetAsyncKeyState(VK_F1) != 0)
 			f1_pressed = true;
