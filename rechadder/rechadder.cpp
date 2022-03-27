@@ -108,6 +108,10 @@ struct lua_function {
 	{
 		L = state;
 	}
+	~lua_function()
+	{
+		refs.clear();
+	}
 	static void push_table(lua_State* state, const std::vector<std::tuple<std::string, std::string>> args)
 	{
 		lua_newtable(state);
@@ -174,7 +178,7 @@ struct lua_function {
 LPVOID m_fiber;
 struct fiber {
 	using func_t = void(*)();
-	lua_function* data;
+	std::shared_ptr<lua_function> data;
 	func_t func{};
 	LPVOID fiber_id;
 	std::optional<std::chrono::high_resolution_clock::time_point> m_wake_time;
@@ -195,7 +199,7 @@ struct fiber {
 	{
 		return static_cast<fiber*>(GetFiberData());
 	}
-	fiber(lua_function* d, func_t f)
+	fiber(std::shared_ptr<lua_function> d, func_t f)
 	{
 		func = f;
 		data = d;
@@ -205,14 +209,11 @@ struct fiber {
 				fiber::get_current()->func();
 				while (true)
 				{
-					fiber::get_current()->yield();
+					fiber::get_current()->yield(std::chrono::seconds(1));
 				}
 			}, this);
 	}
-	~fiber()
-	{
-		delete data;
-	}
+
 };
 std::vector<std::unique_ptr<fiber>> fibers{};
 template<class T>
@@ -393,19 +394,17 @@ int script_hooks::LUA_create_os_thread(lua_State* L)
 		return luaL_error(L, "expecting arguments: function(on_thread_creation)");
 	}
 	//find state
-	lua_function* g_cache = nullptr;
+	std::shared_ptr<lua_function> g_cache;
 	for (auto& s : context->scripts)
 		if (s.state == L)
 		{
-			g_cache = new lua_function(s.state);
+			g_cache = std::make_shared<lua_function>(s.state);
+			break;
 		}
-
-
-
 	g_cache->set(luaL_ref(L, LUA_REGISTRYINDEX));
 	fibers.emplace_back(std::make_unique<fiber>(g_cache, [] {
 		fiber::get_current()->data->call();
-		}));
+	}));
 	return 0;
 }
 
@@ -668,7 +667,10 @@ void server_input()
 	bool f1_pressed = false;
 	while (true)
 	{
-		if (own_window_handle != GetForegroundWindow()) continue;
+		if (own_window_handle != GetForegroundWindow())
+		{
+			std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		}
 		if (GetAsyncKeyState(VK_F1) != 0)
 			f1_pressed = true;
 		else if (f1_pressed)
@@ -677,6 +679,7 @@ void server_input()
 			f1_pressed = false;
 			g_ScriptHook.load(true);
 		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
 	}
 }
 void user_input(client_connected_server& client)
@@ -829,6 +832,7 @@ void handle_connection(connection& c)
 			{
 				if (!func.r_call_table({ {"ip", ip}, {"username", to_ip(c)}}, 1))
 				{
+					g_Session.server_instance.username_map.erase(to_ip(c));
 					closesocket(c.socket);
 					remove_connection(c);
 					return;
@@ -839,7 +843,7 @@ void handle_connection(connection& c)
 		}
 		else
 		{
-			FINFO("Handshake established ({})\n", "52, 62");
+			//FINFO("Handshake established ({})\n", "52, 62");
 			for (auto& func : script_hooks::context->on_client)
 			{
 				func.call();
@@ -860,6 +864,8 @@ void handle_connection(connection& c)
 			{
 				FINFO("Disconnected from server: {}\n", to_ip(c));
 			}
+			g_Session.server_instance.username_map.erase(to_ip(c));
+
 			closesocket(c.socket);
 			remove_connection(c);
 			running = false;
@@ -987,7 +993,7 @@ void start_client(const std::string& ip)
 	SetConsoleTitleA("ReChadder - Client");
 	
 	g_Client.connected_server.socket = create_socket();
-	SYNC_FINFO("Connecting to {}...\n", ip);
+	//SYNC_FINFO("Connecting to {}...\n", ip);
 	sockaddr_in sockAddr = create_socket_addr(ip, g_Session.port);
 	if (connect(g_Client.connected_server.socket, (sockaddr*)(&sockAddr), sizeof(sockAddr)) != 0)
 	{
@@ -995,7 +1001,7 @@ void start_client(const std::string& ip)
 		entry();
 	}
 	SetConsoleTitleA(std::format("ReChadder - {}", ip).c_str());
-	SYNC_FINFO("Establishing handshake... {}\n", ip);
+	//SYNC_FINFO("Establishing handshake... {}\n", ip);
 	auto con = net::packet_chadder_connection{};
 	if(g_Session.a_username.length() < 16)
 		memcpy(con.username, net::handle_raw_string(g_Session.a_username.c_str()).c_str(),
@@ -1077,7 +1083,7 @@ void entry()
 int main(int argc, char** argv)
 {
 
-	std::cout << "(re)Chadder(box) - A simple communication system - made by jayphen\nOnce connected to a server, press TAB to compose a message.\n";
+	//std::cout << "(re)Chadder(box) - A simple communication system - made by jayphen\nOnce connected to a server, press TAB to compose a message.\n";
 
 	for (auto& func : script_hooks::context->on_start)
 	{
