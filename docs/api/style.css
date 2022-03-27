@@ -18,7 +18,6 @@ h {
     justify-content: space-between;
     width: 60%;
     margin: 0 auto;
-    
 }
 .limit {
     background-color: #111;
@@ -51,6 +50,7 @@ h {
     width: 100%;
     row-gap: 1em;
     align-items: space-around;
+    grid-auto-rows: minmax(100px, auto);
 }
 .tile {
     min-width: 30%;
@@ -58,8 +58,26 @@ h {
     background-color: #111;
     padding: 13px;
     padding-top: 0px;
+    line-height: 0px;
     border-radius: 5px;
     border: 1px #333 solid;
+}
+@media screen and (max-width: 992px) {
+    .grid {
+        grid-template-columns: 1fr;
+    }
+    .bigtile {
+        grid-column-start: 1;
+        grid-column-end: 2;
+        grid-row-start: 1;
+        grid-row-end: 2;
+    }
+    .header {
+        display: flex;
+        justify-content: space-between;
+        width: 100%;
+        margin: 0 auto;
+    }
 }
 .tile h1 {
     font-family: 'Coda', cursive;
