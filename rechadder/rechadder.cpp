@@ -698,7 +698,6 @@ void server_input()
 		else if (f1_pressed)
 		{
 			f1_pressed = false;
-			f1_pressed = false;
 			g_ScriptHook.load(true);
 		}
 		std::this_thread::sleep_for(std::chrono::milliseconds(50));
