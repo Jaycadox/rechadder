@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="style.css">
+    <script src="index.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.0/styles/base16/material-palenight.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.0/highlight.min.js"></script>
+    <!-- and it's easy to individually load additional languages -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.0/languages/lua.min.js"></script>
+    <script>hljs.highlightAll();</script>
+    <title>Rechadder</title>
+</head>
+<body>
+    <div class="limit">
+        <div class="header">
+            <h>Rechadder</h>
+            <div class="selection">
+                <a href="/">Home</a>
+                <a href="/api">API</a>
+            </div>
+        </div>
+    </div>
+    <div class="container">
+        <div class="grid">
+            <div class="tile">
+                <h1>Lua API Information</h1>
+                <hr>
+                <p>To start creating scripts. Create a folder called 'plugins' in the same directory as your Rechadder executable. All .lua files in that folder will automatically be loaded.</p>
+                <hr>
+                <p>You can reload all scripts without having to restart Rechadder by pressing F1.</p>
+            </div>
+            <div class="tile">
+                <h1>Events</h1>
+                <hr/>
+                <h2>events.on_client</h2>
+<pre><code class="language-lua">events.on_client(function()
+    print("I will run when a client starts!")
+end)</code></pre>
+                <p>Called when a client is loaded and connects to a server. Expects a function with no parameters as the first parameter.</p>
+                <hr/>
+                <h2>events.on_server</h2>
+<pre><code class="language-lua">events.on_server(function()
+    print("I will run when a server starts!")
+end)</code></pre>
+                <p>Called when a server is loaded. Expects a function with no parameters as the first parameter.</p>
+                <hr/>
+                <h2>events.on_start</h2>
+<pre><code class="language-lua">events.on_start(function()
+    print("I will run when Rechadder finishes loading!")
+end)</code></pre>
+                <p>Called when either a client or a server finishes loading, this does not require the client to be connected to a server.</p>
+                <hr/>
+                <h2>events.on_message</h2>
+<pre><code class="language-lua">events.on_message(function(ctx)
+    print("Username: " .. ctx.username .. " Message: " .. ctx.message)
+    return true 
+    -- Returning true cancels the default handler.
+    -- When server: the message won't be broadcasted. When client: the message won't display on the screen.
+end)</code></pre>
+                <p>Expects the function callback to have a parameter. Passes a table containing elements 'username', and 'message'.<br>Server: Called when a client sends a message, return true to stop the message from being broadcasted to all other clients.<br>Client: Called when you recieve a message from the server, return true to stop the message from being printed.</p>
+            </div>
+            <div class="tile">
+                <h1>Client</h1>
+                <hr>
+                <h2>client.send_message</h2>
+<pre><code class="language-lua">client.send_message("Hello!")</code></pre>
+                <p>Sends a normal message to the server. Parameter is a string, which is the message content. You cannot choose your username.</p>
+                <hr/>
+                <h2>client.on_compose</h2>
+<pre><code class="language-lua">-- Script that appends text to any message you send
+client.on_compose(function(ctx)
+    client.send_message(ctx.message .. " appended text")
+    return true -- cancel default handler (sending to server)
+end)</code></pre>
+                <p>Called when you finish composing a message. Return true to cancel sending to server.</p>
+            </div>
+            <div class="tile">
+                <h1>Server</h1>
+                <hr>
+                <h2>server.broadcast</h2>
+<pre><code class="language-lua">server.broadcast("Make sure to read the rules!")</code></pre>
+                <p>Prints the first argument to all connected clients screen.</p>
+                <hr>
+                <h2>server.send</h2>
+<pre><code class="language-lua">-- Displays a MOTD to any connecting client.
+server.on_connection(function(ctx)
+    server.send(ctx.username, "Welcome to the server!")
+end)</code></pre>
+                <p>Prints the second argument to the client whose username matches the first argument. Please note that when sending messages to a client as soon as they connect might have undefined behaviour as the client might not have acknowledged the connection handshake. I personally recommend yielding for a few hundred milliseconds.</p>
+                <hr>
+                <h2>server.on_connection</h2>
+<pre><code class="language-lua">-- Displays a MOTD to any connecting client.
+server.on_connection(function(ctx)
+    server.send(ctx.username, "Welcome to the server!")
+end)</code></pre>
+                <p>Calls the first argument with a context parameter with a table containing the element: 'username'</p>
+                <hr>
+                <h2>server.connections</h2>
+<pre><code class="language-lua">-- When a client types '@online': send them the names of all connected clients
+events.on_server(function()
+    events.on_message(function(ctx)
+        if ctx.message == "@online" then
+            for index, name in ipairs(server.connections()) do
+                server.send(ctx.username, "> " .. name)
+            end
+            return true -- cancel handler
+        end
+    end)
+end)</code></pre>
+                <p>Returns a table containing the usernames of all connected clients.</p>
+            </div>
+            <div class="tile">
+                <h1>Util</h1>
+                <hr>
+                <h2>util.create_thread</h2>
+<pre><code class="language-lua">-- Prints 'hello' and 'goodbye' at the same time.
+events.on_server(function()
+    util.create_thread(function()
+        while true do
+            print("hello")
+            util.yield(0)
+        end
+    end)
+end)
+while true do
+    print("goodbye")
+end</code></pre>
+                <p>Creates a parallel execution state. This is however, not asynchronous. You will need to call util.yield to return execution back to the script thread handler. If you're familiar with the term, this creates a fiber.</p>
+                <hr>
+                <h2>util.yield</h2>
+<pre><code class="language-lua">-- Reminds users of the rules every ten seconds
+events.on_server(function()
+    util.create_thread(function()
+        while true do
+            server.broadcast("Remember the rules: No swearing!")
+            util.yield(10000)
+        end
+    end)
+end)</code></pre>
+                <p>This sleeps a thread for a variable amount of time. The time (in milliseconds) are provided by the first argument. If you have a while true loop, you need to util.yield(0) as this returns execution to the script handler.</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
