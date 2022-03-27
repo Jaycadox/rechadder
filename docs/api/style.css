@@ -39,7 +39,7 @@ h {
     display: flex;
     justify-content: space-evenly;
     width: 60%;
-    min-width: 400px;
+    min-width: 380px;
     padding: 5px;
 
 }

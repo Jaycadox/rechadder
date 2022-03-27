@@ -39,7 +39,7 @@ h {
     display: flex;
     justify-content: space-evenly;
     width: 60%;
-    min-width: 400px;
+    min-width: 380px;
     padding: 5px;
 
 }
@@ -71,6 +71,10 @@ h {
 @media screen and (max-width: 992px) {
     .grid {
         grid-template-columns: 1fr;
+    }
+    .tile {
+        width: 80%;
+        margin: 0 auto;
     }
     .bigtile {
         grid-column-start: 1;
