@@ -729,29 +729,18 @@ void user_input(client_connected_server& client)
 			while (true)
 			{
 				auto c = next_char();
-				//if (allow_input != 1)
-				//{
-				//	allow_input++;
-				//	continue;
-				//}
 				if (c == "\r") break;
-
-				if (c == ";") continue;
+				//if (c == ";") continue;
 				if (c == "\b")
 				{
 					if(!buffer.empty())
 						buffer.pop_back();
 				}
 				else
-				{
 					buffer += c;
-				}
-
 				std::cout << c;
 				if (c == "\b")
-				{
 					std::cout << " \b";
-				}
 			}
 			for (const auto& c : buffer + "> Compose message: ")
 				std::cout << "\b";

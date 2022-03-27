@@ -21,12 +21,6 @@
     <ClCompile Include="rechadder.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="command_handler.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="command.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="lua\lcode.c">
       <Filter>Source Files\lua</Filter>
     </ClCompile>
