@@ -6,6 +6,7 @@ body {
     background-color: #151515;
     font-family: 'Coda', cursive;
     color: white;
+    line-height: 30px;
 }
 h {
     padding: 10px;
@@ -14,8 +15,24 @@ h {
 }
 .header {
     display: flex;
-    padding: 5px;
+    justify-content: space-between;
+    width: 60%;
+    margin: 0 auto;
+    
+}
+.limit {
     background-color: #111;
+    width: 100%;
+}
+.selection {
+    margin-right: 10px;
+    display: flex;
+    justify-content: space-evenly;
+}
+.selection a {
+    text-decoration: none;
+    color: #ccc;
+    padding: 10px;
 }
 .container {
     margin: 10px auto;
@@ -25,6 +42,7 @@ h {
     padding: 5px;
 
 }
+
 .grid {
     display: grid;
     grid-template-columns: 1fr 1fr 1fr;
@@ -32,6 +50,7 @@ h {
     width: 100%;
     row-gap: 1em;
     align-items: space-around;
+    grid-auto-rows: minmax(100px, auto);
 }
 @media screen and (max-width: 992px) {
     .grid {
@@ -39,6 +58,7 @@ h {
     }
   }
 .tile {
+
     min-width: 30%;
     min-height: 100px;
     background-color: #111;
@@ -46,8 +66,13 @@ h {
     padding-top: 0px;
     line-height: 0px;
     border-radius: 5px;
-    border-style: solid;
-    border-color: #222;
+    border: 1px #333 solid;
+}
+.bigtile {
+    grid-column-start: 1;
+    grid-column-end: 4;
+    grid-row-start: 1;
+    grid-row-end: 2;
 }
 .tile h1 {
     font-family: 'Coda', cursive;
@@ -74,26 +99,27 @@ button {
     width: 100%;
     min-height: 30px;
     border-radius: 5px;
-    border-width: 1px;
+    
     font-family: 'Coda', cursive;
 }
 button:hover {
     cursor: pointer;
-    box-shadow: 0px 0px 2px 2px #030303;
 }
 .github {
-    border: #222 solid;
+    border: 1px #222 solid;
     color: #ccc;
     background-color: #333;
 }
 .github:hover {
-    background-color: #444;
+    background-color: rgb(61, 61, 61);
+    border: 1px rgb(43, 43, 43) solid;
 }
 .api {
-    border: rgb(0, 86, 199) solid;
+    border: 1px rgb(0, 86, 199) solid;
     color: #eee;
     background-color: rgb(0, 110, 255);
 }
 .api:hover {
     background-color: rgb(21, 122, 255);
+    border: 1px rgb(28, 108, 212) solid;
 }

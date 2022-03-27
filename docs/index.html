@@ -8,11 +8,25 @@
     <title>Rechadder</title>
 </head>
 <body>
-    <div class="header">
-        <h>Rechadder</h>
+    <div class="limit">
+        <div class="header">
+            <h>Rechadder</h>
+            <div class="selection">
+                <a href="/">Home</a>
+                <a href="/api">API</a>
+            </div>
+        </div>
+
     </div>
     <div class="container">
+
         <div class="grid">
+            <div class="tile bigtile">
+                <h1 style="text-align: center;">Rechadder</h1>
+                <hr/>
+                <p style="text-align: center;">A command line interface chatting application. All the basic features, none of the bloat.</p>
+                <button class="api">Download</button>
+            </div>
             <div class="tile">
                 <h1>Lightweight</h1>
                 <hr/>
@@ -22,7 +36,7 @@
                 <h1>Scriptable</h1>
                 <hr/>
                 <p>ReChadder as intuitive, and advanced scripting for both the server and client using Lua.</p>
-                <button class="api">Lua API documentation</button>
+                <button class="api" onclick="window.location.href='/api'">Lua API documentation</button>
             </div>
             <div class="tile">
                 <h1>Free & Open Source</h1>
