@@ -1,0 +1,216 @@
+@import url('https://fonts.googleapis.com/css2?family=Coda&display=swap'); 
+@import url('https://fonts.googleapis.com/css2?family=Karla&display=swap');
+body {
+    margin: 0px;
+    padding: 0px;
+    background-color: #151515;
+    font-family: 'Coda', cursive;
+    color: white;
+    line-height: 30px;
+}
+h {
+    padding: 10px;
+    font-size: 1em;
+    font-weight: normal;
+}
+.header {
+    display: flex;
+    justify-content: space-between;
+    width: 98%;
+    margin: 0 auto;
+}
+.limit {
+    background-color: #111;
+    width: 100%;
+    margin: 0;
+}
+.selection {
+    margin-right: 10px;
+    display: flex;
+    justify-content: space-evenly;
+}
+.selection a {
+    text-decoration: none;
+    color: #ccc;
+    padding: 10px;
+}
+.container {
+    margin: 10px auto;
+    display: flex;
+    justify-content: space-evenly;
+    width: 95%;
+    min-width: 300px;
+    padding: 5px;
+
+}
+.grid {
+    display: grid;
+    grid-template-columns: 1fr 4fr;
+    column-gap: 10px;
+    width: 100%;
+    row-gap: 1em;
+    align-items: start;
+
+}
+.tile {
+    min-width: 30%;
+    min-height: 100px;
+    background-color: #111;
+    padding: 13px;
+    padding-top: 10px;
+    
+    line-height: 10px;
+    border-radius: 5px;
+    border: 1px #333 solid;
+}
+.pad {
+    padding-right: 30px;
+}
+.cnt {
+    height: 210px;
+}
+.seperator {
+    width: 100%;
+    margin: 0 auto;
+    height: 70%;
+    padding: 10px;
+    grid-template-columns: 1fr;
+    grid-auto-flow: row;
+    row-gap: 10px;
+}
+.chat {
+    align-self: start;
+    background-color:#222;
+    border-radius: 5px;
+    padding: 10px;
+    height: 535px;
+    border: #555 solid 1px;
+}
+.seperator {
+    display: grid;
+}
+.controls {
+    align-self: end;
+    display: grid;
+    grid-template-columns: 8fr 1fr;
+    column-gap: 10px;
+    background-color: #252525;
+    padding: 5px;
+    border:#555 solid 1px;
+    border-radius: 5px;
+}
+.inp {
+    background-color: #252525;
+    border:none;
+    border-radius: 5px;
+    padding: 5px;
+    color: #eee;
+    
+}
+.horiz {
+    grid-template-columns: 1fr;
+    align-items: start;
+}
+textarea {
+    height: 520px;
+    width: 1100px;
+    background-color: #222;
+    color: #fff;
+    line-height: 10px;
+    border: none;
+    resize: none;
+}
+.inp:focus {
+    outline: none;
+}
+.full {
+    background-color: #1a1a1a;
+    width: 95%;
+    margin-bottom: 10px;
+}
+.sc {
+    height: 377px;
+}
+.menu {
+    height: 85%;
+    display: grid;
+    align-items: space-evenly;
+}
+.menu button {
+    margin-top: auto;
+    margin-bottom: 10px;
+    height: 10px;
+}
+.script {
+    text-align: center;
+}
+@media screen and (max-width: 992px) {
+    .grid {
+        grid-template-columns: 1fr;
+    }
+    .tile {
+        width: 80%;
+        margin: 0 auto;
+    }
+    .bigtile {
+        grid-column-start: 1;
+        grid-column-end: 2;
+        grid-row-start: 1;
+        grid-row-end: 2;
+    }
+    .header {
+        display: flex;
+        justify-content: space-between;
+        width: 100%;
+        margin: 0 auto;
+    }
+}
+.tile h1 {
+    font-family: 'Coda', cursive;
+    font-size: 1.4em;
+    font-weight: lighter;
+    line-height: 30px;
+    margin-bottom: 3px;
+}
+hr {
+    height: 1px;
+    background-color: #333;
+    border: none;
+}
+p {
+    font-family: 'Karla', sans-serif;
+    font-size: 0.9em;
+    line-height: 23px;
+    color: #eee;
+    margin-top: 10px;
+    margin-bottom: 10px;
+    font-weight: 100;
+}
+button {
+    width: 100%;
+    min-height: 30px;
+    border-radius: 5px;
+    
+    font-family: 'Coda', cursive;
+}
+button:hover {
+    cursor: pointer;
+}
+.github {
+    border: 1px #333 solid;
+    color: #ccc;
+    background-color: #222;
+}
+.github:hover {
+    background-color: rgb(61, 61, 61);
+    border: 1px rgb(43, 43, 43) solid;
+}
+.api {
+    border: 1px rgb(0, 86, 199) solid;
+    color: #eee;
+    background-color: rgb(0, 110, 255);
+}
+.api:hover {
+    background-color: rgb(21, 122, 255);
+    border: 1px rgb(28, 108, 212) solid;
+}

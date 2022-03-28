@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="style.css">
+    <script defer src="index.js"></script>
+    <title>Rechadder - Web View</title>
+</head>
+<body>
+    <div class="limit">
+        <div class="header">
+            <h>Rechadder - Web View</h>
+        </div>
+    </div>
+    <div class="container">
+
+        <div class="grid">
+            <div class="grid horiz">
+                <div class="tile cnt">
+                    <h1>Connection</h1>
+                    <hr>
+                    <input class="inp full" id="ip" placeholder="IP" type="text"/>
+                    <input class="inp full" id="port" placeholder="Port" type="text"/>
+                    <input class="inp full" id="username" placeholder="Username" type="text"/>
+                    <button class="github" id="ctnbtn">Connect</button>
+                </div>
+                <div class="tile cnt sc">
+                    <h1>Scripts</h1>
+                    <hr>
+                    <div class="menu">
+                        <div id="script_list">
+                            <input class="inp full script" disabled placeholder="Loading..." type="text"/>
+                        </div>
+                        <button class="api" id="rldscripts">Reload Scripts</button>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="tile pad">
+                <div class="seperator">
+                    <div class="chat">
+                        <code ><textarea id="codeblock" disabled>loading...</textarea></code>
+                    </div>
+                    <div class="controls">
+                        <input class="inp" id="inpu" placeholder="type your message here" type="text"/>
+                        <button class="api" id="hellobtn">Send</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

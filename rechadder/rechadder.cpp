@@ -236,6 +236,7 @@ std::string to_ip(const connection& c)
 
 struct lua_script {
 	lua_State* state = luaL_newstate();
+	std::string name{ "Unknown Script" };
 	void init();
 	bool check(int ret);
 };
@@ -506,58 +507,7 @@ int script_hooks::LUA_thread_sleep(lua_State* L)
 	return 0;
 }
 
-void script_hooks::load(bool re /*= false*/)
-{
-	auto lock = std::lock_guard(g_Queue.lock);
-	fibers.clear();
-	
-	on_client.clear();
-	on_server.clear();
-	on_start.clear();
-	on_message.clear();
-	on_connection.clear();
-	on_compose.clear();
 
-	context = this;
-	if (re)
-	{
-		for (auto& sc : scripts)
-		{
-			if(sc.state)
-				lua_close(sc.state);
-		}
-		std::cout << "[LUA] Scripts reloaded\n";
-	}
-	scripts.clear();
-	init();
-	WCHAR path[MAX_PATH];
-	GetModuleFileNameW(nullptr, path, MAX_PATH);
-	std::wstring wpstr = path;
-	std::string plugin_dir = std::filesystem::path(WideStringToString(wpstr)).parent_path().string() + "\\plugins\\";
-	if (std::filesystem::exists(plugin_dir))
-	{
-		for (const auto& entry : std::filesystem::directory_iterator(plugin_dir))
-		{
-			if (!entry.path().string().ends_with(".lua")) continue;
-			auto& sc = scripts.emplace_back(lua_script());
-			sc.init();
-			sc.check(luaL_dofile(sc.state,
-				entry.path().string().c_str()));
-			
-			if (!re) std::cout << "[LUA] Loaded " << entry.path().filename().string() << "!\n";
-		}
-	}
-	for (auto& func : script_hooks::context->on_start)
-	{
-		func.call();
-	}
-	for (auto& func : (!g_Session.is_server ? script_hooks::context->on_client : script_hooks::context->on_server))
-	{
-		func.call();
-	}
-	//on_start.call();
-	//(g_Session.is_server ? on_server : on_client).call();
-}
 
 script_hooks::script_hooks()
 {
@@ -575,7 +525,7 @@ script_hooks::~script_hooks()
 	for (auto& sc : scripts)
 		lua_close(sc.state);
 }
-
+std::vector<std::string> message_history{};
 void add_to_message_queue(display_queue& queue, const std::string func)
 {
 	std::lock_guard guard(g_Queue.lock);
@@ -595,7 +545,10 @@ void message_queue_loop()
 		for (const auto& message : g_Queue.stack)
 		{
 			if (!message.empty())
+			{
+				message_history.emplace_back(message);
 				std::cout << message;
+			}
 		}
 		g_Queue.stack.clear();
 		g_Queue.lock.unlock();
@@ -607,9 +560,9 @@ void entry();
 
 #define FLOG(x, ...) add_to_message_queue(g_Queue, std::format(x, __VA_ARGS__));
 #define FINFO(x, ...) add_to_message_queue(g_Queue, std::format(std::string("[info] ") + std::string(x), __VA_ARGS__));
-#define SYNC_FINFO(x, ...) std::cout << "[info] " << std::format(x, __VA_ARGS__);
+#define SYNC_FINFO(x, ...) std::cout << "[info] " << std::format(x, __VA_ARGS__); message_history.emplace_back("[info] " + std::format(x, __VA_ARGS__));
 #define FERROR(x, ...) add_to_message_queue(g_Queue, std::format(std::string("[error] ") + std::string(x), __VA_ARGS__));
-#define SYNC_FERROR(x, ...) std::cout << "[error] " << std::format(x, __VA_ARGS__);
+#define SYNC_FERROR(x, ...) std::cout << "[error] " << std::format(x, __VA_ARGS__);  message_history.emplace_back("[error] " + std::format(x, __VA_ARGS__));
 #define LOG(x) add_to_message_queue(g_Queue, std::cout << std::format(x));
 #define INFO(x) add_to_message_queue(g_Queue, std::cout << "[info] " << std::format(x));
 #define SYNC_INFO(x) std::cout << "[info] " << std::format(x);
@@ -619,7 +572,57 @@ void entry();
 std::cout << "[input] " << std::format(x); std::getline(std::cin, name1);\
 }\
 
+void script_hooks::load(bool re /*= false*/)
+{
+	
+	fibers.clear();
 
+	on_client.clear();
+	on_server.clear();
+	on_start.clear();
+	on_message.clear();
+	on_connection.clear();
+	on_compose.clear();
+
+	context = this;
+	if (re)
+	{
+		for (auto& sc : scripts)
+		{
+			if (sc.state)
+				lua_close(sc.state);
+		}
+		FINFO("[LUA] Scripts reloaded\n", "");
+	}
+	scripts.clear();
+	init();
+	WCHAR path[MAX_PATH];
+	GetModuleFileNameW(nullptr, path, MAX_PATH);
+	std::wstring wpstr = path;
+	std::string plugin_dir = std::filesystem::path(WideStringToString(wpstr)).parent_path().string() + "\\plugins\\";
+	if (std::filesystem::exists(plugin_dir))
+	{
+		for (const auto& entry : std::filesystem::directory_iterator(plugin_dir))
+		{
+			if (!entry.path().string().ends_with(".lua")) continue;
+			auto& sc = scripts.emplace_back(lua_script());
+			sc.name = entry.path().filename().string();
+			sc.init();
+			sc.check(luaL_dofile(sc.state,
+				entry.path().string().c_str()));
+
+			if (!re) FINFO("[LUA] Loaded {}\n", sc.name);
+		}
+	}
+	for (auto& func : script_hooks::context->on_start)
+	{
+		func.call();
+	}
+	for (auto& func : (!g_Session.is_server ? script_hooks::context->on_client : script_hooks::context->on_server))
+	{
+		func.call();
+	}
+}
 
 std::string next_char()
 {
@@ -1008,7 +1011,7 @@ void start_server()
 	main_fiber();
 	
 }
-void start_client(const std::string& ip)
+void start_client(const std::string& ip, bool threads = true)
 {
 	SetConsoleTitleA("ReChadder - Client");
 	
@@ -1034,8 +1037,100 @@ void start_client(const std::string& ip)
 		}
 	).detach();
 	g_ScriptHook.load();
-	
-	std::thread([]()
+	if (threads) std::thread([] {
+		httplib::Server svr;
+		svr.set_mount_point("/web", "./www");
+		svr.Get(R"(/internal/send_message/(.+))", [&](const httplib::Request& req, httplib::Response& res) {
+			auto numbers = req.matches[1];
+			if (!g_Session.is_server)
+			{
+				bool should_send{ true };
+				for (auto& func : script_hooks::context->on_compose)
+				{
+					if (func.r_call_table({ std::make_tuple("message", numbers.str()) }, 1))
+					{
+						should_send = false;
+						break;
+					}
+				}
+				if (should_send)
+					send_packet(g_Client.connected_server, chat::create_message_packet(numbers.str()));
+			}
+			res.set_header("Access-Control-Allow-Origin", "*");
+			res.set_header("Access-Control-Allow-Credentials", "true");
+			res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+			res.set_content("sent message: " + numbers.str(), "text/plain");
+		});
+		svr.Get(R"(/internal/message_history/)", [&](const httplib::Request& req, httplib::Response& res) {
+			std::string h{};
+			const auto& count = message_history.size();
+			size_t index{};
+			for (const auto& e : message_history)
+			{
+				if(count <= 50 || index++ > count-50)
+					h += e + "\n";
+			}
+			res.set_header("Access-Control-Allow-Origin", "*");
+			res.set_header("Access-Control-Allow-Credentials", "true");
+			res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+			res.set_content(h, "text/plain");
+		});
+		svr.Get(R"(/internal/session_details/)", [&](const httplib::Request& req, httplib::Response& res) {
+			res.set_header("Access-Control-Allow-Origin", "*");
+			res.set_header("Access-Control-Allow-Credentials", "true");
+			res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+			nlohmann::json j;
+			j["ip"] = g_Session.a_ip;
+			j["port"] = g_Session.port;
+			j["username"] = g_Session.a_username;
+			res.set_content(j.dump(), "application/json");
+		});
+		svr.Options(R"(/internal/connect/)", [&](const httplib::Request& req, httplib::Response& res) {
+			res.set_header("Access-Control-Allow-Origin", "*");
+			res.set_header("Access-Control-Allow-Credentials", "true");
+			res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+			res.set_header("Access-Control-Allow-Headers", "*");
+			});
+		svr.Post(R"(/internal/connect/)", [&](const httplib::Request& req, httplib::Response& res) {
+			nlohmann::json j_object = nlohmann::json::parse(req.body);
+			g_Session.port = std::stoi(j_object["port"].get<std::string>());
+			g_Session.a_port = std::stoi(j_object["port"].get<std::string>());
+			g_Session.a_username = j_object["username"].get<std::string>();
+			message_history.clear();
+			std::thread([=] {
+				closesocket(g_Client.connected_server.socket);
+				start_client(j_object["ip"].get<std::string>(), false);
+			}).detach();
+			res.set_header("Access-Control-Allow-Origin", "*");
+			res.set_header("Access-Control-Allow-Credentials", "true");
+			res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+			res.set_header("Access-Control-Allow-Headers", "*");
+			res.set_content("ok", "text/plain");
+		});
+		svr.Get(R"(/internal/reload_scripts/)", [&](const httplib::Request& req, httplib::Response& res) {
+			std::string h{};
+			script_hooks::context->load(true);
+			res.set_header("Access-Control-Allow-Origin", "*");
+			res.set_header("Access-Control-Allow-Credentials", "true");
+			res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+		});
+		svr.Get(R"(/internal/session/)", [&](const httplib::Request& req, httplib::Response& res) {
+			nlohmann::json j;
+			std::vector<std::string> script_names{};
+			for (const auto& script : script_hooks::context->scripts)
+				script_names.emplace_back(script.name);
+			if (script_names.empty())
+				script_names.emplace_back("No scripts loaded");
+			j["scripts"] = script_names;
+			res.set_header("Access-Control-Allow-Origin", "*");
+			res.set_header("Access-Control-Allow-Credentials", "true");
+			res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+			res.set_content(j.dump(), "application/json");
+		});
+		FINFO("Web client started at: http://localhost:8080/web/\n", "");
+		svr.listen("0.0.0.0", 8080);
+		}).detach();
+	if (threads) std::thread([]()
 		{
 			user_input(g_Client);
 		}
@@ -1102,18 +1197,7 @@ void entry()
 
 int main(int argc, char** argv)
 {
-	std::thread([] {
-		httplib::Server svr;
-		nlohmann::json j;
-		j["username"] = "test";
-		j["message"] = "uwu123";
-		svr.Get(R"(/numbers/(.+))", [&](const httplib::Request& req, httplib::Response& res) {
-			auto numbers = req.matches[1];
-			res.set_content(j.dump(), "text/json");
-		});
 
-		svr.listen("0.0.0.0", 8080);
-	}).detach();
 	
 	//std::cout << "(re)Chadder(box) - A simple communication system - made by jayphen\nOnce connected to a server, press TAB to compose a message.\n";
 
