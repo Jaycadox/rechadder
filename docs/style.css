@@ -35,13 +35,13 @@ h {
     padding: 10px;
 }
 .container {
-    margin: 10px auto;
+    margin: 0 auto;
     display: flex;
     justify-content: space-evenly;
     width: 60%;
     min-width: 300px;
     padding: 5px;
-
+    transition: 0.1s ease;
 }
 .grid {
     display: grid;
@@ -68,12 +68,18 @@ h {
     grid-row-start: 1;
     grid-row-end: 2;
 }
+#centertile {
+    grid-column-start: 2;
+}
 @media screen and (max-width: 992px) {
     .grid {
         grid-template-columns: 1fr;
     }
+    #centertile {
+        grid-column-start: 1;
+    }
     .tile {
-        width: 80%;
+        width: 90%;
         margin: 0 auto;
     }
     .bigtile {
@@ -86,6 +92,10 @@ h {
         display: flex;
         justify-content: space-between;
         width: 100%;
+        margin: 0 auto;
+    }
+    .container {
+        min-width: 80%;
         margin: 0 auto;
     }
 }
