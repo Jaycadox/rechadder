@@ -1066,10 +1066,8 @@ void start_client(const std::string& ip, bool threads = true)
 			const auto& count = message_history.size();
 			size_t index{};
 			for (const auto& e : message_history)
-			{
 				if(count <= 50 || index++ > count-50)
 					h += e + "\n";
-			}
 			res.set_header("Access-Control-Allow-Origin", "*");
 			res.set_header("Access-Control-Allow-Credentials", "true");
 			res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
