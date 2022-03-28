@@ -885,7 +885,7 @@ void handle_connection(connection& c)
 			}
 			else
 			{
-				FINFO("Disconnected from server: {}\n", to_ip(c));
+				FINFO("Disconnected from server: {}:{}\n", g_Session.a_ip, std::to_string(g_Session.port));
 			}
 			g_Session.server_instance.username_map.erase(to_ip(c));
 
@@ -1016,7 +1016,7 @@ void start_client(const std::string& ip, bool threads = true)
 	SetConsoleTitleA("ReChadder - Client");
 	
 	g_Client.connected_server.socket = create_socket();
-	//SYNC_FINFO("Connecting to {}...\n", ip);
+	SYNC_FINFO("Connecting to {}:{}...\n", ip, g_Session.port);
 	sockaddr_in sockAddr = create_socket_addr(ip, g_Session.port);
 	if (connect(g_Client.connected_server.socket, (sockaddr*)(&sockAddr), sizeof(sockAddr)) != 0)
 	{
@@ -1037,96 +1037,8 @@ void start_client(const std::string& ip, bool threads = true)
 		}
 	).detach();
 	g_ScriptHook.load();
-	if (threads) std::thread([] {
-		httplib::Server svr;
-		svr.set_mount_point("/web", "./www");
-		svr.Get(R"(/internal/send_message/(.+))", [&](const httplib::Request& req, httplib::Response& res) {
-			auto numbers = req.matches[1];
-			if (!g_Session.is_server)
-			{
-				bool should_send{ true };
-				for (auto& func : script_hooks::context->on_compose)
-				{
-					if (func.r_call_table({ std::make_tuple("message", numbers.str()) }, 1))
-					{
-						should_send = false;
-						break;
-					}
-				}
-				if (should_send)
-					send_packet(g_Client.connected_server, chat::create_message_packet(numbers.str()));
-			}
-			res.set_header("Access-Control-Allow-Origin", "*");
-			res.set_header("Access-Control-Allow-Credentials", "true");
-			res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-			res.set_content("sent message: " + numbers.str(), "text/plain");
-		});
-		svr.Get(R"(/internal/message_history/)", [&](const httplib::Request& req, httplib::Response& res) {
-			std::string h{};
-			const auto& count = message_history.size();
-			size_t index{};
-			for (const auto& e : message_history)
-				if(count <= 50 || index++ > count-50)
-					h += e + "\n";
-			res.set_header("Access-Control-Allow-Origin", "*");
-			res.set_header("Access-Control-Allow-Credentials", "true");
-			res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-			res.set_content(h, "text/plain");
-		});
-		svr.Get(R"(/internal/session_details/)", [&](const httplib::Request& req, httplib::Response& res) {
-			res.set_header("Access-Control-Allow-Origin", "*");
-			res.set_header("Access-Control-Allow-Credentials", "true");
-			res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-			nlohmann::json j;
-			j["ip"] = g_Session.a_ip;
-			j["port"] = g_Session.port;
-			j["username"] = g_Session.a_username;
-			res.set_content(j.dump(), "application/json");
-		});
-		svr.Options(R"(/internal/connect/)", [&](const httplib::Request& req, httplib::Response& res) {
-			res.set_header("Access-Control-Allow-Origin", "*");
-			res.set_header("Access-Control-Allow-Credentials", "true");
-			res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-			res.set_header("Access-Control-Allow-Headers", "*");
-			});
-		svr.Post(R"(/internal/connect/)", [&](const httplib::Request& req, httplib::Response& res) {
-			nlohmann::json j_object = nlohmann::json::parse(req.body);
-			g_Session.port = std::stoi(j_object["port"].get<std::string>());
-			g_Session.a_port = std::stoi(j_object["port"].get<std::string>());
-			g_Session.a_username = j_object["username"].get<std::string>();
-			message_history.clear();
-			std::thread([=] {
-				closesocket(g_Client.connected_server.socket);
-				start_client(j_object["ip"].get<std::string>(), false);
-			}).detach();
-			res.set_header("Access-Control-Allow-Origin", "*");
-			res.set_header("Access-Control-Allow-Credentials", "true");
-			res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-			res.set_header("Access-Control-Allow-Headers", "*");
-			res.set_content("ok", "text/plain");
-		});
-		svr.Get(R"(/internal/reload_scripts/)", [&](const httplib::Request& req, httplib::Response& res) {
-			std::string h{};
-			script_hooks::context->load(true);
-			res.set_header("Access-Control-Allow-Origin", "*");
-			res.set_header("Access-Control-Allow-Credentials", "true");
-			res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-		});
-		svr.Get(R"(/internal/session/)", [&](const httplib::Request& req, httplib::Response& res) {
-			nlohmann::json j;
-			std::vector<std::string> script_names{};
-			for (const auto& script : script_hooks::context->scripts)
-				script_names.emplace_back(script.name);
-			if (script_names.empty())
-				script_names.emplace_back("No scripts loaded");
-			j["scripts"] = script_names;
-			res.set_header("Access-Control-Allow-Origin", "*");
-			res.set_header("Access-Control-Allow-Credentials", "true");
-			res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-			res.set_content(j.dump(), "application/json");
-		});
-		FINFO("Web client started at: http://localhost:8080/web/\n", "");
-		svr.listen("0.0.0.0", 8080);
+	if (threads && g_Session.web_client) std::thread([] {
+		
 		}).detach();
 	if (threads) std::thread([]()
 		{
@@ -1138,13 +1050,123 @@ void start_client(const std::string& ip, bool threads = true)
 
 void entry()
 {
+	own_window_handle = GetConsoleWindow();
 	std::thread(message_queue_loop).detach();
 	if (!args.count("server") && !args.count("ip"))
 	{
-
-		std::cout << "Client[0] Server[1] > ";
-		g_Session.is_server = std::stoi(next_char());
-		std::cout << std::format("{}\n", g_Session.is_server ? "Server" : "Client");
+		WCHAR path[MAX_PATH];
+		GetModuleFileNameW(nullptr, path, MAX_PATH);
+		std::wstring wpstr = path;
+		std::string web_dir = std::filesystem::path(WideStringToString(wpstr)).parent_path().string() + "\\www\\";
+		if (std::filesystem::exists(web_dir))
+		{
+			std::cout << "Client[0] Server[1] Web Client[2] > ";
+			const auto input = next_char();
+			g_Session.is_server = std::stoi(input) == 1;
+			g_Session.web_client = std::stoi(input) == 2;
+			std::cout << std::format("{}\n", g_Session.is_server ? "Server" : (g_Session.web_client ? "Web Client" : "Client"));
+		}
+		else
+		{
+			std::cout << "To be able to load the web client. Download and follow the installation guide for the addon at: https://jaycadox.github.io/rechadder\n\n";
+			std::cout << "Client[0] Server[1] > ";
+			g_Session.is_server = std::stoi(next_char());
+			std::cout << std::format("{}\n", g_Session.is_server ? "Server" : "Client");
+		}
+		if (g_Session.web_client)
+		{
+			httplib::Server svr;
+			svr.set_mount_point("/web", "./www");
+			svr.Get(R"(/internal/send_message/(.+))", [&](const httplib::Request& req, httplib::Response& res) {
+				auto numbers = req.matches[1];
+				if (!g_Session.is_server)
+				{
+					bool should_send{ true };
+					for (auto& func : script_hooks::context->on_compose)
+					{
+						if (func.r_call_table({ std::make_tuple("message", numbers.str()) }, 1))
+						{
+							should_send = false;
+							break;
+						}
+					}
+					if (should_send)
+						send_packet(g_Client.connected_server, chat::create_message_packet(numbers.str()));
+				}
+				res.set_header("Access-Control-Allow-Origin", "*");
+				res.set_header("Access-Control-Allow-Credentials", "true");
+				res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+				res.set_content("sent message: " + numbers.str(), "text/plain");
+				});
+			svr.Get(R"(/internal/message_history/)", [&](const httplib::Request& req, httplib::Response& res) {
+				std::string h{};
+				const auto& count = message_history.size();
+				size_t index{};
+				for (const auto& e : message_history)
+					if (count <= 50 || index++ > count - 50)
+						h += e + "\n";
+				res.set_header("Access-Control-Allow-Origin", "*");
+				res.set_header("Access-Control-Allow-Credentials", "true");
+				res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+				res.set_content(h, "text/plain");
+				});
+			svr.Get(R"(/internal/session_details/)", [&](const httplib::Request& req, httplib::Response& res) {
+				res.set_header("Access-Control-Allow-Origin", "*");
+				res.set_header("Access-Control-Allow-Credentials", "true");
+				res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+				nlohmann::json j;
+				j["ip"] = g_Session.a_ip;
+				j["port"] = g_Session.port;
+				j["username"] = g_Session.a_username;
+				res.set_content(j.dump(), "application/json");
+				});
+			svr.Options(R"(/internal/connect/)", [&](const httplib::Request& req, httplib::Response& res) {
+				res.set_header("Access-Control-Allow-Origin", "*");
+				res.set_header("Access-Control-Allow-Credentials", "true");
+				res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+				res.set_header("Access-Control-Allow-Headers", "*");
+				});
+			svr.Post(R"(/internal/connect/)", [&](const httplib::Request& req, httplib::Response& res) {
+				nlohmann::json j_object = nlohmann::json::parse(req.body);
+				g_Session.port = std::stoi(j_object["port"].get<std::string>());
+				g_Session.a_port = std::stoi(j_object["port"].get<std::string>());
+				g_Session.a_username = j_object["username"].get<std::string>();
+				message_history.clear();
+				std::thread([=] {
+					closesocket(g_Client.connected_server.socket);
+					g_Session.a_ip = j_object["ip"].get<std::string>() == "" ? "127.0.0.1" : j_object["ip"].get<std::string>();
+					start_client(g_Session.a_ip, false);
+				}).detach();
+				res.set_header("Access-Control-Allow-Origin", "*");
+				res.set_header("Access-Control-Allow-Credentials", "true");
+				res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+				res.set_header("Access-Control-Allow-Headers", "*");
+				res.set_content("ok", "text/plain");
+			});
+			svr.Get(R"(/internal/reload_scripts/)", [&](const httplib::Request& req, httplib::Response& res) {
+				std::string h{};
+				script_hooks::context->load(true);
+				res.set_header("Access-Control-Allow-Origin", "*");
+				res.set_header("Access-Control-Allow-Credentials", "true");
+				res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+				});
+			svr.Get(R"(/internal/session/)", [&](const httplib::Request& req, httplib::Response& res) {
+				nlohmann::json j;
+				std::vector<std::string> script_names{};
+				for (const auto& script : script_hooks::context->scripts)
+					script_names.emplace_back(script.name);
+				if (script_names.empty())
+					script_names.emplace_back("No scripts loaded");
+				j["scripts"] = script_names;
+				res.set_header("Access-Control-Allow-Origin", "*");
+				res.set_header("Access-Control-Allow-Credentials", "true");
+				res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+				res.set_content(j.dump(), "application/json");
+			});
+			FINFO("Web client started at: http://localhost:8080/web/\n", "");
+			system("start http://localhost:8080/web/");
+			svr.listen("0.0.0.0", 8080);
+		}
 	}
 	else
 	{
@@ -1161,7 +1183,7 @@ void entry()
 
 		}
 	
-	own_window_handle = GetConsoleWindow();
+	
 	if (!args.count("port"))
 	{
 		FINPUT("Port [blank=1111]> ", resp_1);

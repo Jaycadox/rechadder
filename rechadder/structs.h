@@ -24,11 +24,12 @@ struct server {
 };
 
 struct session {
-	short port{};
+	short port{1111};
 	bool is_server{};
+	bool web_client{};
 	//todo: make thread safe
 	server server_instance;
-	std::string a_username{};
+	std::string a_username{"Anon"};
 	std::string a_ip{};
 	std::string a_port{};
 	bool a_server{};
