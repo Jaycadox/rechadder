@@ -1,8 +1,17 @@
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define _WINSOCK_DEPRECATED_NO_WARNINGS
 #include <windows.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#pragma comment (lib, "Ws2_32.lib")
+#pragma comment (lib, "Mswsock.lib")
+#pragma comment (lib, "AdvApi32.lib")
+#endif
+#ifdef __linux__
+#include <sys/socket.h>
+#endif
+
 #include <cstdlib>
 #include <cstdio>
 #include <iostream>
@@ -12,9 +21,7 @@
 #include <functional>
 #undef DrawText
 // Need to link with Ws2_32.lib, Mswsock.lib, and Advapi32.lib
-#pragma comment (lib, "Ws2_32.lib")
-#pragma comment (lib, "Mswsock.lib")
-#pragma comment (lib, "AdvApi32.lib")
+
 #include <mutex>
 #include "packet.h"
 #include "structs.h"
@@ -1249,6 +1256,7 @@ int main(int argc, char** argv)
 		g_Session.a_username = args["username"].as<std::string>();
 	const int iReqWinsockVer = 2;
 	WSADATA wsaData;
+#ifdef _WIN32
 	if (WSAStartup(MAKEWORD(iReqWinsockVer, 0), &wsaData) == 0)
 	{
 		if (LOBYTE(wsaData.wVersion) < iReqWinsockVer)
@@ -1268,5 +1276,9 @@ int main(int argc, char** argv)
 	else
 		SYNC_FERROR("Unable to initiate Chadder. This is most likely due to an internet error. WinSock error code: ",
 			get_last_winsock_error());
+#endif
+#ifdef __linux__
+	entry();
+#endif
 	return 0;
 }
