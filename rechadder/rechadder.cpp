@@ -47,7 +47,7 @@ HWND own_window_handle;
 
 cxxopts::Options options("ReChadder", "Easy console communication.");
 cxxopts::ParseResult args;
-
+#ifdef _WIN32
 static std::string WideStringToString(const std::wstring& wstr)
 {
 	if (wstr.empty())
@@ -80,7 +80,7 @@ static std::string WideStringToString(const std::wstring& wstr)
 	}
 	return ret;
 }
-
+#endif
 struct lua_argument {
 	virtual void push(lua_State* L) = 0;
 };
