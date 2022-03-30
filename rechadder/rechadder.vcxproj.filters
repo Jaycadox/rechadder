@@ -233,5 +233,14 @@
     <ClInclude Include="json.hpp">
       <Filter>Source Files</Filter>
     </ClInclude>
+    <ClInclude Include="format.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="core.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="format-inl.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

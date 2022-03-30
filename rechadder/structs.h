@@ -1,6 +1,12 @@
 #pragma once
+#ifdef _WIN32
 #include <windows.h>
 #include <winsock2.h>
+#endif
+#ifdef __linux__
+#include <sys/socket.h>
+#endif
+
 #include <vector>
 #include <mutex>
 #include <string>
