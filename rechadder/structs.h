@@ -5,6 +5,8 @@
 #endif
 #ifdef __linux__
 #include <sys/socket.h>
+#include <sys/types.h>
+#include <arpa/inet.h>
 #endif
 
 #include <vector>
