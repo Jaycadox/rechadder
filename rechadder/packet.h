@@ -146,7 +146,7 @@ namespace net {
 	net::packet_s_broadcast make_broadcast_packet(const std::string& text)
 	{
 		net::packet_s_broadcast pack{};
-		memcpy(pack.message, text.c_str(), sizeof(pack.message));
+		std::memcpy(pack.message, text.c_str(), sizeof(pack.message));
 		return pack;
 	}
 	bool handle_packet(const packet_handler& handler, char* packet, int size)
